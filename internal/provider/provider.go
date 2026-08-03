@@ -163,11 +163,14 @@ func (p *arubasdwanProvider) Configure(ctx context.Context, req provider.Configu
 // supports. Each factory function creates a new data source instance. The data
 // sources provide read-only access to Orchestrator state:
 //
-//   - SecurityZones:      Lists all security zones.
-//   - SecurityPolicies:   Lists all firewall policies for a given segment pair.
-//   - AppPortProtocols:   Lists all port/protocol application classifications.
-//   - ApplicationGroups:  Lists all application groups (tags).
-//   - VRFSegments:        Lists all VRF segments and zone-to-VRF mappings.
+//   - SecurityZones:         Lists all security zones.
+//   - SecurityPolicies:      Lists all firewall policies for a given segment pair.
+//   - AppPortProtocols:      Lists all port/protocol application classifications.
+//   - ApplicationGroups:     Lists all application groups (tags).
+//   - VRFSegments:           Lists all VRF segments and zone-to-VRF mappings.
+//   - ApplianceDeployments:  Lists all appliances with serial numbers and all
+//     configured IP interfaces (mgmt, WAN, LAN, loopback) including discovered
+//     public IPs for WAN interfaces behind NAT.
 func (p *arubasdwanProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewSecurityZonesDataSource,
@@ -179,6 +182,7 @@ func (p *arubasdwanProvider) DataSources(_ context.Context) []func() datasource.
 		NewApplicationGroupsDataSource,
 		NewIPAddressGroupsDataSource,
 		NewVRFSegmentsDataSource,
+		NewApplianceDeploymentsDataSource,
 	}
 }
 

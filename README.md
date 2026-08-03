@@ -32,6 +32,8 @@ https://developer.arubanetworks.com/edgeconnect/reference/
   - `arubasdwan_ip_address_groups` (data source): List all IP address groups
 - **VRF Segments** — read VRF segments and resolve segment pairs by name
   - `arubasdwan_vrf_segments` (data source): List all VRF segments and optionally resolve a segment pair from VRF names
+- **Appliance Inventory** — read appliances and their deployment for documentation/export use cases
+  - `arubasdwan_appliance_deployments` (data source): List all appliances with hostname, serial number, and every configured IP interface (mgmt, WAN, LAN, VLAN sub-interfaces, loopbacks) including interface label, VRF segment, security zone, firewall mode, bandwidth limits, and the public IP discovered by the Orchestrator for WAN interfaces behind NAT. Also reports the SD-WAN region, applied template groups, Business Intent Overlays (BIO), locally configured static routes, EC license, system bandwidth, and the DHCP server/relay configuration of LAN interfaces per appliance
 
 ## Requirements
 
@@ -718,6 +720,196 @@ resource "arubasdwan_security_policy" "cross_vrf" {
 
 ---
 
+## Data Source: `arubasdwan_appliance_deployments`
+
+Retrieves all appliances with their deployment configuration: hostname, serial number, and every configured IP interface — management interfaces (`mgmt0`, `mgmt1`, …), WAN/LAN datapath interfaces (including VLAN sub-interfaces), and loopback interfaces. Each interface carries its deployment settings: interface label, VRF segment, security zone, firewall mode, and bandwidth limits. For WAN interfaces behind NAT (typically carrying private addresses), the public IP discovered by the Orchestrator is included. Each appliance additionally reports its SD-WAN region, the applied template groups, the Business Intent Overlays (BIO) it is associated with, its locally configured static routes, the configured EC license, and the system bandwidth. LAN interfaces with DHCP server or relay enabled include the full DHCP configuration.
+
+The data is combined from `GET /gms/rest/appliance`, `GET /gms/rest/deployment`, `GET /gms/rest/virtualif/loopback`, `GET /gms/rest/tunnelsConfiguration/deployment`, `GET /gms/rest/regions{,/appliances}`, `GET /gms/rest/template/applianceAssociation`, `GET /gms/rest/gms/overlays/{association,config/regions}`, `GET /gms/rest/subnets/all`, `GET /gms/rest/license/portal/appliance`, and — for segment/zone name resolution — `GET /gms/rest/vrf/config/segments` and `GET /gms/rest/zones/vrfSegmentZonesMap`.
+
+### Arguments
+
+| Argument | Type   | Required | Description                                                                 |
+|----------|--------|----------|-----------------------------------------------------------------------------|
+| `ne_pk`  | string | no       | Appliance primary key (e.g. `"3.NE"`) to fetch a single appliance. If omitted, all appliances are returned. |
+| `cached` | bool   | no       | Read deployment data from the Orchestrator database (`true`, default) or live from each appliance (`false`). Live reads are slower and fail for unreachable appliances. |
+| `models` | list   | no       | Only include appliances with one of these models (case-insensitive exact match) |
+| `exclude_models` | list | no  | Exclude appliances with one of these models (case-insensitive exact match) |
+| `sites`  | list   | no       | Only include appliances tagged with one of these sites (case-insensitive exact match) |
+| `exclude_sites` | list | no   | Exclude appliances tagged with one of these sites (case-insensitive exact match) |
+| `hostname_regex` | string | no | Only include appliances whose hostname matches this RE2 regex |
+| `exclude_hostname_regex` | string | no | Exclude appliances whose hostname matches this RE2 regex |
+
+All filters are combined with AND and applied **before** any per-appliance data is fetched — excluded appliances are never queried.
+
+```hcl
+data "arubasdwan_appliance_deployments" "filtered" {
+  exclude_models         = ["EC-V"]
+  exclude_hostname_regex = "(?i)^(lab|test)-"
+  sites                  = ["Berlin", "Hamburg"]
+}
+```
+
+### Attributes
+
+| Attribute    | Type | Description                                                  |
+|--------------|------|--------------------------------------------------------------|
+| `appliances` | list | List of appliance objects, sorted by hostname (see below)    |
+
+Each object in `appliances` contains:
+
+| Field              | Type   | Description                                                       |
+|--------------------|--------|-------------------------------------------------------------------|
+| `ne_pk`            | string | Orchestrator primary key of the appliance (e.g. `"3.NE"`)         |
+| `hostname`         | string | Appliance hostname                                                |
+| `serial`           | string | Hardware serial number                                            |
+| `model`            | string | Appliance model (e.g. `"EC-S-B"`)                                 |
+| `site`             | string | Site name the appliance is tagged with                            |
+| `software_version` | string | ECOS software version                                             |
+| `mode`             | string | Deployment mode (e.g. `"inline-router"`)                          |
+| `network_role`     | string | Network role (e.g. `"0"` = spoke, `"1"` = hub)                    |
+| `management_ip`    | string | IP address the Orchestrator uses to manage the appliance          |
+| `region_id`        | int64  | SD-WAN region ID the appliance belongs to (`0` = Default region or regions not used) |
+| `region_name`      | string | Resolved SD-WAN region name; empty if regions are not used        |
+| `license`          | object | EC license (deployment config, filled in from the portal license assignment): `tier`, `tier_bandwidth`, `boost`, `boost_bandwidth` — bandwidth values passed through unchanged |
+| `system_bandwidth_outbound` | int64 | System maximum outbound bandwidth in Kbps (`0` = not set)   |
+| `system_bandwidth_inbound`  | int64 | System maximum inbound bandwidth in Kbps (`0` = not set)    |
+| `template_groups`  | list   | Names of the template groups applied to the appliance (sorted)    |
+| `overlays`         | list   | Business Intent Overlays (BIO) the appliance is associated with (see below) |
+| `static_routes`    | list   | Locally configured static routes of the appliance (see below)     |
+| `interfaces`       | list   | All configured IP interfaces (see below)                          |
+
+Each object in `overlays` contains:
+
+| Field  | Type   | Description                                                    |
+|--------|--------|----------------------------------------------------------------|
+| `id`   | string | Numeric overlay ID as reported by the Orchestrator (e.g. `"1"`) |
+| `name` | string | Overlay name (e.g. `"RealTime"`); empty if it cannot be resolved |
+
+Each object in `static_routes` contains (learned and system-generated routes are excluded):
+
+| Field       | Type   | Description                                                 |
+|-------------|--------|-------------------------------------------------------------|
+| `prefix`    | string | Destination prefix in CIDR notation (e.g. `"10.20.0.0/16"`) |
+| `next_hop`  | string | Next hop IP address; empty if not applicable                |
+| `interface` | string | Egress interface name; empty if not applicable              |
+| `metric`    | int64  | Route metric (lower value = higher priority)                |
+| `vrf_id`    | int64  | VRF segment ID the route belongs to (`0` = Default)         |
+| `vrf_name`  | string | Resolved VRF segment name                                   |
+| `advertise` | bool   | Route is advertised to SD-WAN peers                         |
+
+Each object in `interfaces` contains:
+
+| Field           | Type   | Description                                                                                   |
+|-----------------|--------|-----------------------------------------------------------------------------------------------|
+| `name`          | string | Interface name (e.g. `"mgmt0"`, `"wan0"`, `"wan0.100"`, `"lan0"`, `"loopback100"`)             |
+| `type`          | string | `"mgmt"`, `"wan"`, `"lan"`, `"loopback"`, or `"other"`                                        |
+| `ip_address`    | string | Configured IP address (without prefix length)                                                 |
+| `prefix_length` | int64  | Network mask as prefix length (e.g. `24`)                                                     |
+| `cidr`          | string | IP in CIDR notation (e.g. `"10.1.2.3/24"`)                                                    |
+| `label`         | string | Interface label name (e.g. `"INET1"`, `"MPLS"`); empty if none assigned                       |
+| `vlan`          | string | VLAN ID for VLAN sub-interfaces; empty otherwise                                              |
+| `dhcp`          | bool   | Interface obtains its address dynamically; for DHCP WAN interfaces the current address seen by the Orchestrator is reported |
+| `behind_nat`    | bool   | The Orchestrator considers this WAN interface to be behind a NAT device                       |
+| `public_ip`     | string | Public IP discovered by the Orchestrator for this WAN interface (the "discovered IP"); empty if none |
+| `is_private`    | bool   | `ip_address` is private / not globally routable — IPv4: RFC1918, CGNAT (RFC6598), link-local, loopback; IPv6: ULA (RFC4193), link-local, loopback |
+| `vrf_id`        | int64  | VRF segment ID the interface is assigned to (`0` = Default); always `0` for mgmt interfaces, reported for loopbacks from Orchestrator 9.7.0 |
+| `vrf_name`      | string | Resolved VRF segment name (e.g. `"Default"`); empty for mgmt interfaces and for loopbacks before Orchestrator 9.7.0 |
+| `zone_id`       | int64  | Security zone ID assigned to the interface (`0` = no zone)                                    |
+| `zone_name`     | string | Resolved security zone name; empty if no zone assigned                                        |
+| `firewall_mode` | string | Firewall mode of WAN interfaces: `"allow-all"`, `"hardened"`, `"stateful"`, `"stateful-snat"`; empty for non-WAN interfaces |
+| `max_bandwidth_outbound` | int64 | Maximum outbound (LAN → WAN) bandwidth in Kbps from the per-interface shaper, falling back to the Orchestrator's resolved view; `0` if not set (WAN only) |
+| `max_bandwidth_inbound`  | int64 | Maximum inbound (WAN → LAN) bandwidth in Kbps from the per-interface shaper, falling back to the Orchestrator's resolved view; `0` if not set (WAN only)  |
+| `dhcp_config`   | object | DHCP server/relay configuration of the LAN interface; `null` when neither is enabled (see below) |
+
+`dhcp_config` contains `mode` (`"server"` or `"relay"`). In server mode: `prefix`, `ip_start`, `ip_end`, `ranges` (list of `{start, end}`), `gateways`, `dns_servers`, `ntp_servers`, `netbios_servers`, `netbios_node_type`, `default_lease`, `max_lease`, `options` (map keyed by DHCP option ID), `failover`, and `reservations` (list of `{hostname, ip, mac}`). In relay mode: `dhcp_servers`, `option82`, and `option82_policy`.
+
+The `interfaces` list contains **one entry per configured IP address**, ordered: management interfaces first, then WAN/LAN in deployment order, then loopbacks. Interfaces without a configured IP address are omitted. The interface `name` is **not unique** within the list — a dual-stack interface appears once per address family (IPv4 and IPv6). When building maps keyed by `name`, group values with the HCL ellipsis operator (`{ for i in a.interfaces : i.name => i.cidr... }`) or include the `cidr` in the key.
+
+> **Note:** If auxiliary data (loopback interfaces, discovered public IPs, or label names) cannot be fetched for individual appliances, the read succeeds with Terraform warnings and the affected fields stay empty. Failures reading the appliance inventory or deployment itself are hard errors, so a partial inventory is never silently reported as complete.
+
+### Example — Inventory overview
+
+```hcl
+data "arubasdwan_appliance_deployments" "all" {}
+
+output "inventory" {
+  value = {
+    for a in data.arubasdwan_appliance_deployments.all.appliances :
+    a.hostname => {
+      serial = a.serial
+      # One entry per IP address: a dual-stack interface reports its name
+      # once per address family, so group the CIDRs by name with "..."
+      interfaces = { for i in a.interfaces : i.name => i.cidr... }
+    }
+  }
+}
+```
+
+### Example — Discovered public IPs of NAT'ed WAN interfaces
+
+```hcl
+data "arubasdwan_appliance_deployments" "all" {}
+
+output "wan_public_ips" {
+  value = {
+    for a in data.arubasdwan_appliance_deployments.all.appliances :
+    a.hostname => [
+      for i in a.interfaces : {
+        interface     = i.name
+        configured_ip = i.cidr
+        public_ip     = i.public_ip
+      } if i.type == "wan" && i.is_private && i.public_ip != ""
+    ]
+  }
+}
+```
+
+### Example — WAN interface deployment details
+
+```hcl
+data "arubasdwan_appliance_deployments" "all" {}
+
+output "wan_details" {
+  value = {
+    for a in data.arubasdwan_appliance_deployments.all.appliances :
+    a.hostname => [
+      for i in a.interfaces : {
+        interface     = i.name
+        label         = i.label
+        vrf           = i.vrf_name
+        zone          = i.zone_name
+        firewall_mode = i.firewall_mode
+        bw_out_kbps   = i.max_bandwidth_outbound
+        bw_in_kbps    = i.max_bandwidth_inbound
+      } if i.type == "wan"
+    ]
+  }
+}
+```
+
+### Example — Region, applied templates/overlays, and static routes
+
+```hcl
+data "arubasdwan_appliance_deployments" "all" {}
+
+output "applied_config" {
+  value = {
+    for a in data.arubasdwan_appliance_deployments.all.appliances :
+    a.hostname => {
+      region          = a.region_name
+      template_groups = a.template_groups
+      overlays        = [for o in a.overlays : o.name]
+      static_routes = [
+        for r in a.static_routes :
+        "${r.prefix} via ${r.next_hop} (${r.vrf_name}, metric ${r.metric})"
+      ]
+    }
+  }
+}
+```
+
+---
+
 ## Resource: `arubasdwan_security_policy`
 
 Manages a single security policy rule on the Orchestrator. Policies are scoped to a segment pair and identified by the combination of source zone, destination zone, and priority.
@@ -1061,6 +1253,7 @@ terraform-provider-arubasdwan/
 │   ├── client/
 │   │   ├── client.go                                    # REST API client (zones, policies)
 │   │   ├── application.go                               # REST API client (app definitions, groups)
+│   │   ├── appliance.go                                 # REST API client (appliance inventory & deployment)
 │   │   ├── ipobjects.go                                 # REST API client (IP address groups)
 │   │   └── vrf.go                                       # REST API client (VRF segments)
 │   └── provider/
@@ -1080,7 +1273,8 @@ terraform-provider-arubasdwan/
 │       ├── application_groups_data_source.go            # Application groups data source
 │       ├── ip_address_group_resource.go                 # IP address group resource (CRUD)
 │       ├── ip_address_groups_data_source.go             # IP address groups data source
-│       └── vrf_segments_data_source.go                  # VRF segments data source
+│       ├── vrf_segments_data_source.go                  # VRF segments data source
+│       └── appliance_deployments_data_source.go         # Appliance inventory & deployment data source
 └── examples/
     └── main.tf                                          # Example Terraform configuration
 ```

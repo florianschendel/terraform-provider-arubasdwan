@@ -39,3 +39,9 @@ terraform.rc
 
 # Aruba Orchestrator
 /terraform-provider-arubasdwan
+
+# Local API reference (not part of the provider)
+gmsApiInfo.json
+
+# Local API references (not part of the provider)
+Orchestrator_API_Swagger_*.zip
