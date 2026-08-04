@@ -34,6 +34,8 @@ https://developer.arubanetworks.com/edgeconnect/reference/
   - `arubasdwan_vrf_segments` (data source): List all VRF segments and optionally resolve a segment pair from VRF names
 - **Appliance Inventory** — read appliances and their deployment for documentation/export use cases
   - `arubasdwan_appliance_deployments` (data source): List all appliances with hostname, serial number, and every configured IP interface (mgmt, WAN, LAN, VLAN sub-interfaces, loopbacks) including interface label, VRF segment, security zone, firewall mode, bandwidth limits, and the public IP discovered by the Orchestrator for WAN interfaces behind NAT. Also reports the SD-WAN region, applied template groups, Business Intent Overlays (BIO), locally configured static routes, EC license, system bandwidth, and the DHCP server/relay configuration of LAN interfaces per appliance
+- **VRRP** — read the VRRP configuration of the appliances for documentation/export use cases
+  - `arubasdwan_vrrp_instances` (data source): List the VRRP instances configured on the appliances: group ID (VRID), peering interface, virtual IP address, priority, preemption, and timers, plus the operational state (Master/Backup/Init, current master IP, transitions, uptime, virtual MAC)
 
 ## Requirements
 
@@ -910,6 +912,105 @@ output "applied_config" {
 
 ---
 
+## Data Source: `arubasdwan_vrrp_instances`
+
+Retrieves the VRRP instances configured on the appliances: per appliance the group ID (VRID), peering interface, virtual IP address, priority, preemption, and timers, plus the operational state (Master/Backup/Init, current master IP, transitions, uptime, virtual MAC). Appliances without VRRP configuration are included with an empty `vrrp_instances` list.
+
+The data is combined from `GET /gms/rest/appliance` (inventory) and `GET /gms/rest/vrrp` (VRRP instances per appliance).
+
+### Arguments
+
+The data source supports the same appliance filters as `arubasdwan_appliance_deployments`:
+
+| Argument | Type   | Required | Description                                                                 |
+|----------|--------|----------|-----------------------------------------------------------------------------|
+| `ne_pk`  | string | no       | Appliance primary key (e.g. `"3.NE"`) to fetch a single appliance. If omitted, all appliances are returned. |
+| `cached` | bool   | no       | Read VRRP data from the Orchestrator database (`true`, default) or live from each appliance (`false`). Live reads are slower and fail for unreachable appliances. |
+| `models` | list   | no       | Only include appliances with one of these models (case-insensitive exact match) |
+| `exclude_models` | list | no  | Exclude appliances with one of these models (case-insensitive exact match) |
+| `sites`  | list   | no       | Only include appliances tagged with one of these sites (case-insensitive exact match) |
+| `exclude_sites` | list | no   | Exclude appliances tagged with one of these sites (case-insensitive exact match) |
+| `hostname_regex` | string | no | Only include appliances whose hostname matches this RE2 regex |
+| `exclude_hostname_regex` | string | no | Exclude appliances whose hostname matches this RE2 regex |
+
+All filters are combined with AND and applied **before** any per-appliance data is fetched — excluded appliances are never queried.
+
+### Attributes
+
+| Attribute    | Type | Description                                                  |
+|--------------|------|--------------------------------------------------------------|
+| `appliances` | list | List of appliance objects, sorted by hostname (see below)    |
+
+Each object in `appliances` contains:
+
+| Field            | Type   | Description                                               |
+|------------------|--------|-----------------------------------------------------------|
+| `ne_pk`          | string | Orchestrator primary key of the appliance (e.g. `"3.NE"`) |
+| `hostname`       | string | Appliance hostname                                        |
+| `serial`         | string | Hardware serial number                                    |
+| `model`          | string | Appliance model (e.g. `"EC-S-B"`)                         |
+| `site`           | string | Site name the appliance is tagged with                    |
+| `vrrp_instances` | list   | VRRP instances of the appliance, sorted by interface and group ID; empty if none are configured (see below) |
+
+Each object in `vrrp_instances` contains:
+
+| Field                 | Type   | Description                                                        |
+|-----------------------|--------|--------------------------------------------------------------------|
+| `group_id`            | int64  | VRRP group ID (VRID) shared by the two peers of the group (1-255)  |
+| `interface`           | string | Interface the instance is peering on (e.g. `"lan0"`)               |
+| `virtual_ip`          | string | Virtual IP address of the VRRP group                               |
+| `priority`            | int64  | VRRP priority (1-254); the peer with the higher priority is the master |
+| `enabled`             | bool   | Instance is administratively up                                    |
+| `preempt`             | bool   | Higher-priority peer takes the master role back when it returns    |
+| `holddown`            | int64  | Holddown timer in seconds                                          |
+| `advertisement_timer` | int64  | Time interval between VRRP advertisements in seconds               |
+| `description`         | string | Description string of the instance                                 |
+| `auth`                | string | VRRP authentication string (sensitive); may be empty or masked by the Orchestrator |
+| `state`               | string | Operational state: `"Master"`, `"Backup"`, or `"Init"` (initializing, disabled, or interface down) |
+| `master_ip`           | string | Interface or local IP address of the current VRRP master           |
+| `master_transitions`  | int64  | Number of Master/Backup transitions; a high number indicates a problematic VRRP setup |
+| `uptime`              | string | Time elapsed in the current state (e.g. `"0 days 11 hrs 49 mins 41 secs"`) |
+| `virtual_mac`         | string | MAC address the instance is using (`00-00-5E-00-01-{VRID}` on hardware appliances, the interface MAC on virtual appliances) |
+| `vip_owner`           | bool   | Appliance owns the virtual IP; always `false` on EdgeConnect appliances |
+| `packet_trace`        | bool   | VRRP packet tracing is enabled                                     |
+
+### Example — VRRP overview per appliance
+
+```hcl
+data "arubasdwan_vrrp_instances" "all" {}
+
+output "vrrp" {
+  value = {
+    for a in data.arubasdwan_vrrp_instances.all.appliances :
+    a.hostname => [
+      for v in a.vrrp_instances : {
+        interface  = v.interface
+        group_id   = v.group_id
+        virtual_ip = v.virtual_ip
+        priority   = v.priority
+        state      = v.state
+      }
+    ] if length(a.vrrp_instances) > 0
+  }
+}
+```
+
+### Example — Virtual IPs for documentation exports (e.g. NetBox FHRP groups)
+
+```hcl
+data "arubasdwan_vrrp_instances" "all" {}
+
+output "virtual_ips" {
+  value = distinct(flatten([
+    for a in data.arubasdwan_vrrp_instances.all.appliances : [
+      for v in a.vrrp_instances : v.virtual_ip
+    ]
+  ]))
+}
+```
+
+---
+
 ## Resource: `arubasdwan_security_policy`
 
 Manages a single security policy rule on the Orchestrator. Policies are scoped to a segment pair and identified by the combination of source zone, destination zone, and priority.
@@ -1238,6 +1339,12 @@ This provider communicates with the following Orchestrator REST API endpoints:
 | `GET`    | `/gms/rest/vrf/config/segments`           | List all VRF segments                    |
 | `GET`    | `/gms/rest/zones/vrfSegmentZonesMap`      | List zone-to-VRF assignments (zone IDs are unique per VRF) |
 
+### VRRP
+
+| Method   | Endpoint                                  | Description                              |
+|----------|-------------------------------------------|------------------------------------------|
+| `GET`    | `/gms/rest/vrrp?nePk=<pk>&cached=<bool>`  | List the VRRP instances of one appliance |
+
 Authentication is performed via the `X-Auth-Token` HTTP header containing the API key.
 
 ## Project Structure
@@ -1255,7 +1362,8 @@ terraform-provider-arubasdwan/
 │   │   ├── application.go                               # REST API client (app definitions, groups)
 │   │   ├── appliance.go                                 # REST API client (appliance inventory & deployment)
 │   │   ├── ipobjects.go                                 # REST API client (IP address groups)
-│   │   └── vrf.go                                       # REST API client (VRF segments)
+│   │   ├── vrf.go                                       # REST API client (VRF segments)
+│   │   └── vrrp.go                                      # REST API client (VRRP instances)
 │   └── provider/
 │       ├── provider.go                                  # Provider definition & configuration
 │       ├── security_zone_resource.go                    # Security zone resource (CRUD)
@@ -1274,7 +1382,8 @@ terraform-provider-arubasdwan/
 │       ├── ip_address_group_resource.go                 # IP address group resource (CRUD)
 │       ├── ip_address_groups_data_source.go             # IP address groups data source
 │       ├── vrf_segments_data_source.go                  # VRF segments data source
-│       └── appliance_deployments_data_source.go         # Appliance inventory & deployment data source
+│       ├── appliance_deployments_data_source.go         # Appliance inventory & deployment data source
+│       └── vrrp_instances_data_source.go                # VRRP instances data source
 └── examples/
     └── main.tf                                          # Example Terraform configuration
 ```

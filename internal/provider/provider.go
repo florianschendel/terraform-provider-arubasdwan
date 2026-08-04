@@ -171,6 +171,8 @@ func (p *arubasdwanProvider) Configure(ctx context.Context, req provider.Configu
 //   - ApplianceDeployments:  Lists all appliances with serial numbers and all
 //     configured IP interfaces (mgmt, WAN, LAN, loopback) including discovered
 //     public IPs for WAN interfaces behind NAT.
+//   - VRRPInstances:         Lists the VRRP instances configured on the
+//     appliances (group ID, interface, virtual IP, priority, state).
 func (p *arubasdwanProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewSecurityZonesDataSource,
@@ -183,6 +185,7 @@ func (p *arubasdwanProvider) DataSources(_ context.Context) []func() datasource.
 		NewIPAddressGroupsDataSource,
 		NewVRFSegmentsDataSource,
 		NewApplianceDeploymentsDataSource,
+		NewVRRPInstancesDataSource,
 	}
 }
 
