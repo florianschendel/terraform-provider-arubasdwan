@@ -173,6 +173,8 @@ func (p *arubasdwanProvider) Configure(ctx context.Context, req provider.Configu
 //     public IPs for WAN interfaces behind NAT.
 //   - VRRPInstances:         Lists the VRRP instances configured on the
 //     appliances (group ID, interface, virtual IP, priority, state).
+//   - BGPConfig:             Lists the BGP configuration of the appliances
+//     per VRF segment (system settings and configured neighbors).
 func (p *arubasdwanProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewSecurityZonesDataSource,
@@ -186,6 +188,7 @@ func (p *arubasdwanProvider) DataSources(_ context.Context) []func() datasource.
 		NewVRFSegmentsDataSource,
 		NewApplianceDeploymentsDataSource,
 		NewVRRPInstancesDataSource,
+		NewBGPConfigDataSource,
 	}
 }
 

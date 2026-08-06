@@ -36,6 +36,8 @@ https://developer.arubanetworks.com/edgeconnect/reference/
   - `arubasdwan_appliance_deployments` (data source): List all appliances with hostname, serial number, and every configured IP interface (mgmt, WAN, LAN, VLAN sub-interfaces, loopbacks) including interface label, VRF segment, security zone, firewall mode, bandwidth limits, and the public IP discovered by the Orchestrator for WAN interfaces behind NAT. Also reports the SD-WAN region, applied template groups, Business Intent Overlays (BIO), locally configured static routes, EC license, system bandwidth, and the DHCP server/relay configuration of LAN interfaces per appliance
 - **VRRP** — read the VRRP configuration of the appliances for documentation/export use cases
   - `arubasdwan_vrrp_instances` (data source): List the VRRP instances configured on the appliances: group ID (VRID), peering interface, virtual IP address, priority, preemption, and timers, plus the operational state (Master/Backup/Init, current master IP, transitions, uptime, virtual MAC)
+- **BGP** — read the BGP configuration of the appliances for documentation/export use cases
+  - `arubasdwan_bgp_config` (data source): List the BGP configuration of the appliances per VRF segment: system settings (local ASN, router ID, graceful restart, OSPF redistribution) and configured neighbors (peer IP, remote ASN, peer type, timers, route policies, BFD)
 
 ## Requirements
 
@@ -1011,6 +1013,136 @@ output "virtual_ips" {
 
 ---
 
+## Data Source: `arubasdwan_bgp_config`
+
+Retrieves the BGP configuration of the appliances: per appliance and VRF segment the system settings (local ASN, router ID, graceful restart, OSPF redistribution) and the configured neighbors (peer IP, remote ASN, peer type, timers, route policies, BFD). Appliances without BGP configuration are included with an empty `vrfs` list.
+
+The data is combined from `GET /gms/rest/appliance` (inventory) and `GET /gms/rest/bgp/config/allVrfs/system` plus `GET /gms/rest/bgp/config/allVrfs/neighbor` (BGP configuration per appliance and VRF). Orchestrator versions without the allVrfs endpoints fall back to the default-VRF endpoints `/gms/rest/bgp/config/system` and `/gms/rest/bgp/config/neighbor`.
+
+### Arguments
+
+The data source supports the same appliance filters as `arubasdwan_appliance_deployments`:
+
+| Argument | Type   | Required | Description                                                                 |
+|----------|--------|----------|-----------------------------------------------------------------------------|
+| `ne_pk`  | string | no       | Appliance primary key (e.g. `"3.NE"`) to fetch a single appliance. If omitted, all appliances are returned. |
+| `cached` | bool   | no       | Read BGP data from the Orchestrator database (`true`, default) or live from each appliance (`false`). Live reads are slower and fail for unreachable appliances. |
+| `models` | list   | no       | Only include appliances with one of these models (case-insensitive exact match) |
+| `exclude_models` | list | no  | Exclude appliances with one of these models (case-insensitive exact match) |
+| `sites`  | list   | no       | Only include appliances tagged with one of these sites (case-insensitive exact match) |
+| `exclude_sites` | list | no   | Exclude appliances tagged with one of these sites (case-insensitive exact match) |
+| `hostname_regex` | string | no | Only include appliances whose hostname matches this RE2 regex |
+| `exclude_hostname_regex` | string | no | Exclude appliances whose hostname matches this RE2 regex |
+
+All filters are combined with AND and applied **before** any per-appliance data is fetched — excluded appliances are never queried.
+
+### Attributes
+
+| Attribute    | Type | Description                                                  |
+|--------------|------|--------------------------------------------------------------|
+| `appliances` | list | List of appliance objects, sorted by hostname (see below)    |
+
+Each object in `appliances` contains:
+
+| Field      | Type   | Description                                               |
+|------------|--------|-----------------------------------------------------------|
+| `ne_pk`    | string | Orchestrator primary key of the appliance (e.g. `"3.NE"`) |
+| `hostname` | string | Appliance hostname                                        |
+| `serial`   | string | Hardware serial number                                    |
+| `model`    | string | Appliance model (e.g. `"EC-S-B"`)                         |
+| `site`     | string | Site name the appliance is tagged with                    |
+| `vrfs`     | list   | BGP configuration per VRF segment, sorted by VRF ID; empty if the appliance has no BGP configuration (see below) |
+
+Each object in `vrfs` contains:
+
+| Field       | Type   | Description                                                        |
+|-------------|--------|--------------------------------------------------------------------|
+| `vrf_id`    | int64  | VRF segment ID the configuration belongs to (0 = Default)          |
+| `vrf_name`  | string | Resolved VRF segment name (e.g. `"Default"`); empty if it cannot be resolved |
+| `system`    | object | BGP system (process) configuration of the VRF segment (see below)  |
+| `neighbors` | list   | BGP neighbors of the VRF segment, sorted by peer IP; empty if none are configured (see below) |
+
+The `system` object contains:
+
+| Field                      | Type   | Description                                                       |
+|----------------------------|--------|-------------------------------------------------------------------|
+| `enabled`                  | bool   | BGP is enabled in this VRF segment                                |
+| `asn`                      | int64  | Local autonomous system number (4-byte ASNs supported)            |
+| `router_id`                | string | BGP router ID                                                     |
+| `graceful_restart`         | bool   | Graceful restart is enabled                                       |
+| `max_restart_time`         | int64  | Max wait in seconds for a restarting peer before its routes are removed (1-3600) |
+| `stale_path_time`          | int64  | Max time in seconds stale routes of a restarted peer are kept (1-3600) |
+| `redistribute_ospf`        | bool   | BGP routes are redistributed to OSPF                              |
+| `redistribute_ospf_filter` | int64  | Filter bitmask applied to routes redistributed to OSPF            |
+| `remote_as_path_advertise` | bool   | The remote AS path is propagated when advertising routes          |
+
+Each object in `neighbors` contains:
+
+| Field                | Type   | Description                                                        |
+|----------------------|--------|--------------------------------------------------------------------|
+| `ip`                 | string | IP address of the neighbor                                         |
+| `remote_as`          | int64  | Remote autonomous system number (4-byte ASNs supported)            |
+| `type`               | string | Peer type (e.g. `"Branch"`, `"Branch-transit"`, `"PE-router"`)     |
+| `enabled`            | bool   | BGP session to this neighbor is enabled                            |
+| `import_routes`      | bool   | Routes learned from the neighbor are imported                      |
+| `export_map`         | int64  | Route export policies bitmask; `4294967295` = predefined bitmask of the peer type unchanged |
+| `hold_timer`         | int64  | Hold timer in seconds                                              |
+| `keepalive_timer`    | int64  | Interval in seconds between KEEPALIVE messages                     |
+| `med`                | int64  | Multi-Exit Discriminator for routes advertised to the neighbor     |
+| `inbound_med`        | int64  | Metric applied to routes received from the neighbor                |
+| `local_preference`   | int64  | Local preference for routes advertised to the neighbor             |
+| `as_prepend_count`   | int64  | Number of additional times the local AS is prepended to the AS path |
+| `next_hop_self`      | bool   | The appliance advertises its own IP address as next hop            |
+| `directly_connected` | bool   | Peer adjacency is treated as single hop (`false` = multi hop)      |
+| `bfd_enabled`        | bool   | A BFD session is desired for this peer                             |
+| `evpn`               | bool   | EVPN is enabled for this peer                                      |
+| `password`           | string | MD5 password of the session (sensitive); may be empty or masked by the Orchestrator |
+
+### Example — BGP overview per appliance
+
+```hcl
+data "arubasdwan_bgp_config" "all" {}
+
+output "bgp" {
+  value = {
+    for a in data.arubasdwan_bgp_config.all.appliances :
+    a.hostname => [
+      for v in a.vrfs : {
+        vrf       = v.vrf_name
+        asn       = v.system.asn
+        router_id = v.system.router_id
+        enabled   = v.system.enabled
+        peers = [
+          for n in v.neighbors : {
+            ip        = n.ip
+            remote_as = n.remote_as
+            type      = n.type
+          }
+        ]
+      }
+    ] if length(a.vrfs) > 0
+  }
+}
+```
+
+### Example — All remote AS numbers peered with
+
+```hcl
+data "arubasdwan_bgp_config" "all" {}
+
+output "remote_as_numbers" {
+  value = distinct(flatten([
+    for a in data.arubasdwan_bgp_config.all.appliances : [
+      for v in a.vrfs : [
+        for n in v.neighbors : n.remote_as
+      ]
+    ]
+  ]))
+}
+```
+
+---
+
 ## Resource: `arubasdwan_security_policy`
 
 Manages a single security policy rule on the Orchestrator. Policies are scoped to a segment pair and identified by the combination of source zone, destination zone, and priority.
@@ -1344,6 +1476,15 @@ This provider communicates with the following Orchestrator REST API endpoints:
 | Method   | Endpoint                                  | Description                              |
 |----------|-------------------------------------------|------------------------------------------|
 | `GET`    | `/gms/rest/vrrp?nePk=<pk>&cached=<bool>`  | List the VRRP instances of one appliance |
+
+### BGP
+
+| Method   | Endpoint                                                        | Description                                        |
+|----------|-----------------------------------------------------------------|----------------------------------------------------|
+| `GET`    | `/gms/rest/bgp/config/allVrfs/system?nePk=<pk>&fromGms=<bool>`  | BGP system configuration of one appliance per VRF  |
+| `GET`    | `/gms/rest/bgp/config/allVrfs/neighbor?nePk=<pk>&fromGms=<bool>`| BGP neighbors of one appliance per VRF             |
+| `GET`    | `/gms/rest/bgp/config/system?nePk=<pk>&fromGms=<bool>`          | Fallback: BGP system configuration, default VRF    |
+| `GET`    | `/gms/rest/bgp/config/neighbor?nePk=<pk>&fromGms=<bool>`        | Fallback: BGP neighbors, default VRF               |
 
 Authentication is performed via the `X-Auth-Token` HTTP header containing the API key.
 
