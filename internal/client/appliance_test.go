@@ -159,7 +159,7 @@ func TestBuildInterfaces(t *testing.T) {
 				{"name": "wan0", "ipAddress": "10.99.1.2", "mask": 30, "behindNAT": true, "publicIpAddress": "198.51.100.77", "outboundBandwidth": 11111, "inboundBandwidth": 22222, "wanSide": true},
 				{"name": "wan1", "ipAddress": "203.0.113.10", "mask": 29, "behindNAT": false, "publicIpAddress": "203.0.113.10", "wanSide": true},
 				{"name": "wan1", "ipAddress": "2001:db8:f::2", "mask": 64, "behindNAT": true, "publicIpAddress": "2001:db8:f::77", "wanSide": true},
-				{"name": "wan2", "ipAddress": "192.168.178.20", "mask": 24, "dhcp": true, "behindNAT": true, "publicIpAddress": "198.51.100.88", "outboundBandwidth": 95000, "inboundBandwidth": 250000, "wanSide": true}
+				{"name": "wan2", "ipAddress": "192.168.178.20", "mask": 24, "dhcp": true, "behindNAT": true, "publicIpAddress": "198.51.100.88", "wanNextHop": "192.168.178.1", "outboundBandwidth": 95000, "inboundBandwidth": 250000, "wanSide": true}
 			],
 			"lanInterfaces": []
 		}
@@ -213,6 +213,9 @@ func TestBuildInterfaces(t *testing.T) {
 	if mgmt0.Type != InterfaceTypeMgmt || mgmt0.CIDR != "192.168.10.5/24" || !mgmt0.IsPrivate {
 		t.Errorf("unexpected mgmt0: %+v", mgmt0)
 	}
+	if mgmt0.NextHop != "192.168.10.1" || !mgmt0.NextHopIsPrivate {
+		t.Errorf("mgmt0 next hop: %+v", mgmt0)
+	}
 
 	// Static WAN with RFC1918 address behind NAT: discovered public IP set.
 	wan0 := byName["wan0"]
@@ -227,6 +230,9 @@ func TestBuildInterfaces(t *testing.T) {
 	}
 	if !wan0.IsPrivate || wan0.CIDR != "10.99.1.2/30" {
 		t.Errorf("wan0 addressing: %+v", wan0)
+	}
+	if wan0.NextHop != "10.99.1.1" || !wan0.NextHopIsPrivate {
+		t.Errorf("wan0 next hop: %+v", wan0)
 	}
 	if wan0.VRFID != 0 || wan0.VRFName != "Default" || wan0.ZoneID != 21 || wan0.ZoneName != "WAN" {
 		t.Errorf("wan0 segment/zone: %+v", wan0)
@@ -262,6 +268,9 @@ func TestBuildInterfaces(t *testing.T) {
 	if wan1v4.FirewallMode != "stateful" || wan1v4.MaxBandwidthOutbound != 50000 {
 		t.Errorf("wan1 IPv4 firewall/bandwidth: %+v", wan1v4)
 	}
+	if wan1v4.NextHop != "203.0.113.9" || wan1v4.NextHopIsPrivate {
+		t.Errorf("wan1 IPv4 next hop: %+v", wan1v4)
+	}
 
 	// IPv6 entry: ULA behind NAT. Its IP is absent from the tunnels view
 	// (which reports the global address), so matching falls back to the
@@ -273,6 +282,9 @@ func TestBuildInterfaces(t *testing.T) {
 	}
 	if !wan1v6.BehindNAT || wan1v6.PublicIP != "2001:db8:f::77" {
 		t.Errorf("wan1 IPv6 NAT/public IP: behindNAT=%v publicIP=%q", wan1v6.BehindNAT, wan1v6.PublicIP)
+	}
+	if wan1v6.NextHop != "fd00:99::1" || !wan1v6.NextHopIsPrivate {
+		t.Errorf("wan1 IPv6 next hop: %+v", wan1v6)
 	}
 
 	// DHCP WAN: no static IP in the deployment config, current address and
@@ -293,6 +305,11 @@ func TestBuildInterfaces(t *testing.T) {
 	if wan2.MaxBandwidthOutbound != 95000 || wan2.MaxBandwidthInbound != 250000 {
 		t.Errorf("wan2 bandwidth fallback: %+v", wan2)
 	}
+	// The deployment has no static next hop for DHCP interfaces; the
+	// current gateway comes from the resolved tunnels view.
+	if wan2.NextHop != "192.168.178.1" || !wan2.NextHopIsPrivate {
+		t.Errorf("wan2 next hop fallback: %+v", wan2)
+	}
 
 	// LAN VLAN sub-interface in a non-default VRF segment; no firewall mode
 	// and no bandwidth limits on LAN interfaces.
@@ -305,6 +322,9 @@ func TestBuildInterfaces(t *testing.T) {
 	}
 	if lanVlan.FirewallMode != "" || lanVlan.MaxBandwidthOutbound != 0 || lanVlan.MaxBandwidthInbound != 0 {
 		t.Errorf("lan0.100 firewall/bandwidth: %+v", lanVlan)
+	}
+	if lanVlan.NextHop != "" || lanVlan.NextHopIsPrivate {
+		t.Errorf("lan0.100 must have no next hop: %+v", lanVlan)
 	}
 
 	// DHCP server configuration on lan0.100.
@@ -718,6 +738,21 @@ func TestResolveOverlays(t *testing.T) {
 	// Unknown overlay IDs keep the ID with an empty name.
 	if refs[1].ID != "3" || refs[1].Name != "" {
 		t.Errorf("unexpected ref 1: %+v", refs[1])
+	}
+}
+
+func TestNormalizeNextHop(t *testing.T) {
+	cases := map[string]string{
+		"10.0.0.1": "10.0.0.1",
+		"fd00::1":  "fd00::1",
+		"0.0.0.0":  "",
+		"::":       "",
+		"":         "",
+	}
+	for in, want := range cases {
+		if got := normalizeNextHop(in); got != want {
+			t.Errorf("normalizeNextHop(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

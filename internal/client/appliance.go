@@ -55,17 +55,19 @@ type Appliance struct {
 // interface of an appliance, regardless of whether it is a management,
 // datapath (WAN/LAN), or loopback interface.
 type ApplianceInterface struct {
-	Name         string // Interface name (e.g. "mgmt0", "wan0", "wan0.100", "lan0", "loopback100")
-	Type         string // One of "mgmt", "wan", "lan", "loopback", "other"
-	IPAddress    string // Configured IP address (without prefix length)
-	PrefixLength int    // Network mask as prefix length (e.g. 24)
-	CIDR         string // IPAddress and PrefixLength combined (e.g. "10.1.2.3/24")
-	Label        string // Interface label name (e.g. "INET1", "MPLS"); raw label ID if it cannot be resolved
-	VLAN         string // VLAN ID for sub-interfaces, empty otherwise
-	DHCP         bool   // True if the interface obtains its address dynamically (DHCP/SLAAC)
-	BehindNAT    bool   // True if the Orchestrator considers this (WAN) interface to be behind a NAT device
-	PublicIP     string // Public IP discovered by the Orchestrator for this (WAN) interface, empty if none
-	IsPrivate    bool   // True if IPAddress is private / not globally routable (RFC1918, CGNAT, link-local, ULA, loopback)
+	Name             string // Interface name (e.g. "mgmt0", "wan0", "wan0.100", "lan0", "loopback100")
+	Type             string // One of "mgmt", "wan", "lan", "loopback", "other"
+	IPAddress        string // Configured IP address (without prefix length)
+	PrefixLength     int    // Network mask as prefix length (e.g. 24)
+	CIDR             string // IPAddress and PrefixLength combined (e.g. "10.1.2.3/24")
+	Label            string // Interface label name (e.g. "INET1", "MPLS"); raw label ID if it cannot be resolved
+	VLAN             string // VLAN ID for sub-interfaces, empty otherwise
+	DHCP             bool   // True if the interface obtains its address dynamically (DHCP/SLAAC)
+	NextHop          string // Configured next hop / gateway IP of the interface; empty if none (e.g. loopbacks)
+	NextHopIsPrivate bool   // True if NextHop is private / not globally routable (same check as IsPrivate); false when NextHop is empty
+	BehindNAT        bool   // True if the Orchestrator considers this (WAN) interface to be behind a NAT device
+	PublicIP         string // Public IP discovered by the Orchestrator for this (WAN) interface, empty if none
+	IsPrivate        bool   // True if IPAddress is private / not globally routable (RFC1918, CGNAT, link-local, ULA, loopback)
 
 	// Deployment settings assigned to the interface.
 	VRFID                int    // VRF segment ID the interface is assigned to (0 = Default)
@@ -387,29 +389,31 @@ func (c *Client) GetAppliances() ([]Appliance, error) {
 // deploymentMgmtIf is the wire format of one management interface entry in
 // the "mgmtIfData" object of the deployment response.
 type deploymentMgmtIf struct {
-	IP   string  `json:"ip"`
-	Mask flexInt `json:"mask"`
-	DHCP bool    `json:"dhcp"`
+	IP      string  `json:"ip"`
+	Mask    flexInt `json:"mask"`
+	DHCP    bool    `json:"dhcp"`
+	Nexthop string  `json:"nexthop"`
 }
 
 // deploymentApplianceIP is the wire format of one IP assignment on a
 // datapath interface ("applianceIPs" array of a "modeIfs" entry).
 type deploymentApplianceIP struct {
-	IP        string     `json:"ip"`
-	Mask      flexInt    `json:"mask"`
-	Label     flexString `json:"label"`
-	LanSide   bool       `json:"lanSide"`
-	WanSide   bool       `json:"wanSide"`
-	BehindNAT string     `json:"behindNAT"` // "auto" = behind NAT, "none"/"" = not behind NAT
-	VLAN      flexString `json:"vlan"`
-	Subif     flexString `json:"subif"`
-	DHCP      bool       `json:"dhcp"`
-	IntfMode  string     `json:"intf_mode"` // static, dhcpv4, dhcpv6, slaac, ...
-	Version   flexInt    `json:"version"`   // IP version of this entry: 4 or 6
-	VRF       flexInt    `json:"vrf"`       // VRF segment ID (0 = Default)
-	Zone      flexInt    `json:"zone"`      // Security zone ID (0 = none)
-	Harden    flexInt    `json:"harden"`    // Firewall mode: 0 = allow all, 1 = hardened, 2 = stateful, 3 = stateful+SNAT
-	MaxBW     *struct {
+	IP         string     `json:"ip"`
+	Mask       flexInt    `json:"mask"`
+	Label      flexString `json:"label"`
+	LanSide    bool       `json:"lanSide"`
+	WanSide    bool       `json:"wanSide"`
+	BehindNAT  string     `json:"behindNAT"`  // "auto" = behind NAT, "none"/"" = not behind NAT
+	WanNexthop string     `json:"wanNexthop"` // Configured next hop IP (WAN interfaces)
+	VLAN       flexString `json:"vlan"`
+	Subif      flexString `json:"subif"`
+	DHCP       bool       `json:"dhcp"`
+	IntfMode   string     `json:"intf_mode"` // static, dhcpv4, dhcpv6, slaac, ...
+	Version    flexInt    `json:"version"`   // IP version of this entry: 4 or 6
+	VRF        flexInt    `json:"vrf"`       // VRF segment ID (0 = Default)
+	Zone       flexInt    `json:"zone"`      // Security zone ID (0 = none)
+	Harden     flexInt    `json:"harden"`    // Firewall mode: 0 = allow all, 1 = hardened, 2 = stateful, 3 = stateful+SNAT
+	MaxBW      *struct {
 		Inbound  flexInt `json:"inbound"`
 		Outbound flexInt `json:"outbound"`
 	} `json:"maxBW"` // Interface bandwidth limits in Kbps (WAN interfaces only)
@@ -733,6 +737,7 @@ type tunnelsInterface struct {
 	DHCP              bool    `json:"dhcp"`
 	BehindNAT         bool    `json:"behindNAT"`
 	PublicIPAddress   string  `json:"publicIpAddress"`
+	WanNextHop        string  `json:"wanNextHop"`        // WAN gateway IP; "0.0.0.0" if not configured
 	InboundBandwidth  flexInt `json:"inboundBandwidth"`  // Inbound shaping in Kbps, 0 if not configured
 	OutboundBandwidth flexInt `json:"outboundBandwidth"` // Outbound shaping in Kbps, 0 if not configured
 }
@@ -1382,6 +1387,14 @@ func resolveLabel(id string, maps ...map[string]string) string {
 	return id
 }
 
+// normalizeNextHop treats the API's "not configured" placeholders as empty.
+func normalizeNextHop(nextHop string) string {
+	if nextHop == "0.0.0.0" || nextHop == "::" {
+		return ""
+	}
+	return nextHop
+}
+
 // datapathInterfaceName builds the effective interface name of an IP
 // assignment: the base interface name, extended by the VLAN ID (preferred)
 // or sub-interface ID for sub-interfaces (e.g. "wan0.100").
@@ -1447,15 +1460,18 @@ func buildInterfaces(dep *deploymentResponse, loops map[string]loopbackDetail, t
 			if mgmt.IP == "" {
 				continue // Interface without an IP address configured.
 			}
-			interfaces = append(interfaces, ApplianceInterface{
+			iface := ApplianceInterface{
 				Name:         name,
 				Type:         InterfaceTypeMgmt,
 				IPAddress:    mgmt.IP,
 				PrefixLength: int(mgmt.Mask),
 				CIDR:         fmt.Sprintf("%s/%d", mgmt.IP, int(mgmt.Mask)),
 				DHCP:         mgmt.DHCP,
+				NextHop:      normalizeNextHop(mgmt.Nexthop),
 				IsPrivate:    isPrivateAddress(mgmt.IP),
-			})
+			}
+			iface.NextHopIsPrivate = iface.NextHop != "" && isPrivateAddress(iface.NextHop)
+			interfaces = append(interfaces, iface)
 		}
 	}
 
@@ -1537,6 +1553,7 @@ func buildInterfaces(dep *deploymentResponse, loops map[string]loopbackDetail, t
 					CIDR:         fmt.Sprintf("%s/%d", ipAddr, mask),
 					VLAN:         string(ip.VLAN),
 					DHCP:         dhcp,
+					NextHop:      normalizeNextHop(ip.WanNexthop),
 					BehindNAT:    ip.BehindNAT == "auto",
 					IsPrivate:    isPrivateAddress(ipAddr),
 					VRFID:        int(ip.VRF),
@@ -1574,6 +1591,9 @@ func buildInterfaces(dep *deploymentResponse, loops map[string]loopbackDetail, t
 					if ti.PublicIPAddress != "" {
 						iface.PublicIP = ti.PublicIPAddress
 					}
+					if iface.NextHop == "" {
+						iface.NextHop = normalizeNextHop(ti.WanNextHop)
+					}
 					if iface.MaxBandwidthOutbound == 0 {
 						iface.MaxBandwidthOutbound = int64(ti.OutboundBandwidth)
 					}
@@ -1581,6 +1601,7 @@ func buildInterfaces(dep *deploymentResponse, loops map[string]loopbackDetail, t
 						iface.MaxBandwidthInbound = int64(ti.InboundBandwidth)
 					}
 				}
+				iface.NextHopIsPrivate = iface.NextHop != "" && isPrivateAddress(iface.NextHop)
 
 				interfaces = append(interfaces, iface)
 			}

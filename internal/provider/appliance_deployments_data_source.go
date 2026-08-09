@@ -86,6 +86,8 @@ type applianceInterfaceDSModel struct {
 	Label                types.String `tfsdk:"label"`
 	VLAN                 types.String `tfsdk:"vlan"`
 	DHCP                 types.Bool   `tfsdk:"dhcp"`
+	NextHop              types.String `tfsdk:"next_hop"`
+	NextHopIsPrivate     types.Bool   `tfsdk:"next_hop_is_private"`
 	BehindNAT            types.Bool   `tfsdk:"behind_nat"`
 	PublicIP             types.String `tfsdk:"public_ip"`
 	IsPrivate            types.Bool   `tfsdk:"is_private"`
@@ -402,6 +404,18 @@ func (d *applianceDeploymentsDataSource) Schema(_ context.Context, _ datasource.
 											"For DHCP WAN interfaces the current address seen by the Orchestrator is reported.",
 										Computed: true,
 									},
+									"next_hop": schema.StringAttribute{
+										Description: "Configured next hop / gateway IP address of the interface (WAN gateway for " +
+											"WAN interfaces, management gateway for mgmt interfaces). For DHCP WAN interfaces " +
+											"the current gateway seen by the Orchestrator is reported. Empty for loopback " +
+											"interfaces and when no next hop is configured.",
+										Computed: true,
+									},
+									"next_hop_is_private": schema.BoolAttribute{
+										Description: "True if next_hop is private or otherwise not globally routable (same ranges " +
+											"as is_private); false when next_hop is empty.",
+										Computed: true,
+									},
 									"behind_nat": schema.BoolAttribute{
 										Description: "True if the Orchestrator considers this WAN interface to be behind a NAT device.",
 										Computed:    true,
@@ -710,6 +724,8 @@ func (d *applianceDeploymentsDataSource) Read(ctx context.Context, req datasourc
 				Label:                types.StringValue(iface.Label),
 				VLAN:                 types.StringValue(iface.VLAN),
 				DHCP:                 types.BoolValue(iface.DHCP),
+				NextHop:              types.StringValue(iface.NextHop),
+				NextHopIsPrivate:     types.BoolValue(iface.NextHopIsPrivate),
 				BehindNAT:            types.BoolValue(iface.BehindNAT),
 				PublicIP:             types.StringValue(iface.PublicIP),
 				IsPrivate:            types.BoolValue(iface.IsPrivate),

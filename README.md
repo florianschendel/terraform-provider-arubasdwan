@@ -813,6 +813,8 @@ Each object in `interfaces` contains:
 | `label`         | string | Interface label name (e.g. `"INET1"`, `"MPLS"`); empty if none assigned                       |
 | `vlan`          | string | VLAN ID for VLAN sub-interfaces; empty otherwise                                              |
 | `dhcp`          | bool   | Interface obtains its address dynamically; for DHCP WAN interfaces the current address seen by the Orchestrator is reported |
+| `next_hop`      | string | Configured next hop / gateway IP (WAN gateway; mgmt gateway for mgmt interfaces; current gateway for DHCP WANs); empty if none |
+| `next_hop_is_private` | bool | `next_hop` is private / not globally routable (same ranges as `is_private`); `false` when `next_hop` is empty |
 | `behind_nat`    | bool   | The Orchestrator considers this WAN interface to be behind a NAT device                       |
 | `public_ip`     | string | Public IP discovered by the Orchestrator for this WAN interface (the "discovered IP"); empty if none |
 | `is_private`    | bool   | `ip_address` is private / not globally routable — IPv4: RFC1918, CGNAT (RFC6598), link-local, loopback; IPv6: ULA (RFC4193), link-local, loopback |

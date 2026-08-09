@@ -139,6 +139,8 @@ Read-Only:
 - `max_bandwidth_inbound` (Number) Maximum inbound (WAN to LAN) bandwidth of the interface in Kbps, from the per-interface shaper in the deployment or, when no shaper is configured there, from the Orchestrator's resolved interface view; 0 if not set (WAN interfaces only).
 - `max_bandwidth_outbound` (Number) Maximum outbound (LAN to WAN) bandwidth of the interface in Kbps, from the per-interface shaper in the deployment or, when no shaper is configured there, from the Orchestrator's resolved interface view; 0 if not set (WAN interfaces only).
 - `name` (String) Interface name (e.g. "mgmt0", "wan0", "wan0.100", "lan0", "loopback100").
+- `next_hop` (String) Configured next hop / gateway IP address of the interface (WAN gateway for WAN interfaces, management gateway for mgmt interfaces). For DHCP WAN interfaces the current gateway seen by the Orchestrator is reported. Empty for loopback interfaces and when no next hop is configured.
+- `next_hop_is_private` (Boolean) True if next_hop is private or otherwise not globally routable (same ranges as is_private); false when next_hop is empty.
 - `prefix_length` (Number) Network mask as prefix length (e.g. 24).
 - `public_ip` (String) Public IP address discovered by the Orchestrator for this WAN interface (the "discovered IP" of interfaces behind NAT); empty if none was resolved.
 - `type` (String) Interface type: "mgmt", "wan", "lan", "loopback", or "other".
