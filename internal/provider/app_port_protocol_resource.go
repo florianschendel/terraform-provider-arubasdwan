@@ -22,6 +22,7 @@ import (
 // Ensure the implementation satisfies the expected interfaces.
 var (
 	_ resource.Resource                = &appPortProtocolResource{}
+	_ resource.ResourceWithModifyPlan  = &appPortProtocolResource{}
 	_ resource.ResourceWithImportState = &appPortProtocolResource{}
 )
 
@@ -145,11 +146,160 @@ func parseAppDefID(id string) (port, protocol int, err error) {
 }
 
 // Create creates the resource and sets the initial Terraform state.
+// findPortProtocolByName returns the first classification whose name matches
+// (compared case-insensitively) on a port/protocol other than the ignored
+// pairs; nil when there is none.
+func findPortProtocolByName(defs []client.PortProtocolClassification, name string, ignorePairs ...[2]int) *client.PortProtocolClassification {
+	for i := range defs {
+		ignored := false
+		for _, pair := range ignorePairs {
+			if defs[i].Port == pair[0] && defs[i].Protocol == pair[1] {
+				ignored = true
+				break
+			}
+		}
+		if !ignored && strings.EqualFold(defs[i].Name, name) {
+			return &defs[i]
+		}
+	}
+	return nil
+}
+
+// portProtocolPairExistsError builds the diagnostic for a collision with the
+// classification that already covers the port/protocol pair.
+func portProtocolPairExistsError(existing *client.PortProtocolClassification) (string, string) {
+	return "Port/protocol classification for this pair already exists", fmt.Sprintf(
+		"The Orchestrator already has a classification for port %d and protocol %d "+
+			"(named %q). Creating this resource would silently overwrite that definition.\n\n"+
+			"If Terraform should manage the existing definition, import it:\n\n"+
+			"  terraform import arubasdwan_app_port_protocol.<name> %s",
+		existing.Port, existing.Protocol, existing.Name, appDefID(existing.Port, existing.Protocol),
+	)
+}
+
+// portProtocolDuplicateNameError builds the diagnostic for a name collision
+// with an existing classification on another port/protocol pair.
+func portProtocolDuplicateNameError(dup *client.PortProtocolClassification, renaming bool) (string, string) {
+	summary := "Port/protocol classification name already in use"
+	if renaming {
+		return summary, fmt.Sprintf(
+			"Another port/protocol classification named %q already exists on the Orchestrator "+
+				"(port %d, protocol %d). Renaming this one to the same name would create a duplicate. "+
+				"Choose a different name.",
+			dup.Name, dup.Port, dup.Protocol,
+		)
+	}
+	return summary, fmt.Sprintf(
+		"A port/protocol classification named %q already exists on the Orchestrator "+
+			"(port %d, protocol %d). The Orchestrator does not enforce unique names, so applying "+
+			"would create a duplicate definition — and overlay ACLs and policies reference "+
+			"applications by name, which makes duplicates ambiguous. Choose a different name, or "+
+			"import the existing definition:\n\n"+
+			"  terraform import arubasdwan_app_port_protocol.<name> %s",
+		dup.Name, dup.Port, dup.Protocol, appDefID(dup.Port, dup.Protocol),
+	)
+}
+
+// ModifyPlan runs the pair and duplicate-name checks already at plan time,
+// so a plan does not promise a create or rename that the apply would refuse.
+// Only plans that create the resource or change its name, port, or protocol
+// call the API; when the listing fails, planning proceeds and the apply-time
+// guard decides.
+func (r *appPortProtocolResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var plan appPortProtocolResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.Port.IsUnknown() || plan.Port.IsNull() || plan.Protocol.IsUnknown() || plan.Protocol.IsNull() ||
+		plan.Name.IsUnknown() || plan.Name.IsNull() {
+		return
+	}
+	port := int(plan.Port.ValueInt64())
+	protocol := int(plan.Protocol.ValueInt64())
+
+	renaming := false
+	checkPair := true
+	ignorePairs := [][2]int{{port, protocol}}
+	if !req.State.Raw.IsNull() {
+		var state appPortProtocolResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		statePort := int(state.Port.ValueInt64())
+		stateProtocol := int(state.Protocol.ValueInt64())
+		if port == statePort && protocol == stateProtocol && plan.Name.ValueString() == state.Name.ValueString() {
+			return
+		}
+		renaming = true
+		// The state's own entry never counts as a collision.
+		checkPair = port != statePort || protocol != stateProtocol
+		ignorePairs = append(ignorePairs, [2]int{statePort, stateProtocol})
+	}
+
+	existing, err := r.client.GetPortProtocolClassifications()
+	if err != nil {
+		resp.Diagnostics.AddWarning(
+			"Could not check port/protocol classification names during planning",
+			"Listing port/protocol classifications failed: "+err.Error()+
+				"\n\nThe duplicate check runs again during apply.",
+		)
+		return
+	}
+	if checkPair {
+		for i := range existing {
+			if existing[i].Port == port && existing[i].Protocol == protocol {
+				summary, detail := portProtocolPairExistsError(&existing[i])
+				resp.Diagnostics.AddAttributeError(path.Root("port"), summary, detail)
+				return
+			}
+		}
+	}
+	if dup := findPortProtocolByName(existing, plan.Name.ValueString(), ignorePairs...); dup != nil {
+		summary, detail := portProtocolDuplicateNameError(dup, renaming)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
+	}
+}
+
+// Create creates the resource and sets the initial Terraform state.
+//
+// The Orchestrator keys port/protocol classifications by the port and
+// protocol pair and treats the create call as an upsert: posting an existing
+// pair would silently overwrite its definition. Names are not enforced to be
+// unique either, and overlay ACLs and policies reference applications by
+// name. Both collisions are therefore rejected.
 func (r *appPortProtocolResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan appPortProtocolResourceModel
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	existing, err := r.client.GetPortProtocolClassifications()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error checking existing port/protocol classifications",
+			"Could not list port/protocol classifications: "+err.Error(),
+		)
+		return
+	}
+	port := int(plan.Port.ValueInt64())
+	protocol := int(plan.Protocol.ValueInt64())
+	for i := range existing {
+		if existing[i].Port == port && existing[i].Protocol == protocol {
+			summary, detail := portProtocolPairExistsError(&existing[i])
+			resp.Diagnostics.AddAttributeError(path.Root("port"), summary, detail)
+			return
+		}
+	}
+	if dup := findPortProtocolByName(existing, plan.Name.ValueString(), [2]int{port, protocol}); dup != nil {
+		summary, detail := portProtocolDuplicateNameError(dup, false)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
 		return
 	}
 
@@ -162,7 +312,7 @@ func (r *appPortProtocolResource) Create(ctx context.Context, req resource.Creat
 		Disabled:    plan.Disabled.ValueBool(),
 	}
 
-	err := r.client.CreatePortProtocolClassification(def)
+	err = r.client.CreatePortProtocolClassification(def)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating port/protocol classification",
@@ -231,6 +381,21 @@ func (r *appPortProtocolResource) Update(ctx context.Context, req resource.Updat
 		return
 	}
 
+	// Renaming must not collide with another definition either.
+	existing, err := r.client.GetPortProtocolClassifications()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error checking existing port/protocol classifications",
+			"Could not list port/protocol classifications: "+err.Error(),
+		)
+		return
+	}
+	if dup := findPortProtocolByName(existing, plan.Name.ValueString(), [2]int{int(plan.Port.ValueInt64()), int(plan.Protocol.ValueInt64())}); dup != nil {
+		summary, detail := portProtocolDuplicateNameError(dup, true)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
+		return
+	}
+
 	def := client.PortProtocolClassification{
 		Name:        plan.Name.ValueString(),
 		Port:        int(plan.Port.ValueInt64()),
@@ -240,7 +405,7 @@ func (r *appPortProtocolResource) Update(ctx context.Context, req resource.Updat
 		Disabled:    plan.Disabled.ValueBool(),
 	}
 
-	err := r.client.UpdatePortProtocolClassification(def)
+	err = r.client.UpdatePortProtocolClassification(def)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating port/protocol classification",

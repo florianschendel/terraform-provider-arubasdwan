@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/florianschendel/terraform-provider-arubasdwan/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -17,6 +18,7 @@ import (
 
 // Ensure the implementation satisfies the expected interfaces.
 var (
+	_ resource.ResourceWithModifyPlan  = &appDNSClassificationResource{}
 	_ resource.Resource                = &appDNSClassificationResource{}
 	_ resource.ResourceWithImportState = &appDNSClassificationResource{}
 )
@@ -109,11 +111,151 @@ func (r *appDNSClassificationResource) Configure(_ context.Context, req resource
 }
 
 // Create creates the resource and sets the initial Terraform state.
+// findDNSByName returns the first classification whose name matches
+// (compared case-insensitively) on a domain other than the ignored ones;
+// nil when there is none.
+func findDNSByName(defs []client.DNSClassification, name string, ignoreDomains ...string) *client.DNSClassification {
+	for i := range defs {
+		ignored := false
+		for _, domain := range ignoreDomains {
+			if strings.EqualFold(defs[i].Domain, domain) {
+				ignored = true
+				break
+			}
+		}
+		if !ignored && strings.EqualFold(defs[i].Name, name) {
+			return &defs[i]
+		}
+	}
+	return nil
+}
+
+// dnsDomainExistsError builds the diagnostic for a collision with the
+// classification that already covers the domain.
+func dnsDomainExistsError(existing *client.DNSClassification) (string, string) {
+	return "DNS classification for this domain already exists", fmt.Sprintf(
+		"The Orchestrator already has a DNS classification for domain %q (named %q). "+
+			"Creating this resource would silently overwrite that definition.\n\n"+
+			"If Terraform should manage the existing definition, import it:\n\n"+
+			"  terraform import arubasdwan_app_dns_classification.<name> %s",
+		existing.Domain, existing.Name, existing.Domain,
+	)
+}
+
+// dnsDuplicateNameError builds the diagnostic for a name collision with an
+// existing classification on another domain.
+func dnsDuplicateNameError(dup *client.DNSClassification, renaming bool) (string, string) {
+	summary := "DNS classification name already in use"
+	if renaming {
+		return summary, fmt.Sprintf(
+			"Another DNS classification named %q already exists on the Orchestrator (domain %q). "+
+				"Renaming this one to the same name would create a duplicate. Choose a different name.",
+			dup.Name, dup.Domain,
+		)
+	}
+	return summary, fmt.Sprintf(
+		"A DNS classification named %q already exists on the Orchestrator (domain %q). "+
+			"The Orchestrator does not enforce unique names, so applying would create a duplicate "+
+			"definition — and overlay ACLs and policies reference applications by name, which makes "+
+			"duplicates ambiguous. Choose a different name, or import the existing definition:\n\n"+
+			"  terraform import arubasdwan_app_dns_classification.<name> %s",
+		dup.Name, dup.Domain, dup.Domain,
+	)
+}
+
+// ModifyPlan runs the domain and duplicate-name checks already at plan time,
+// so a plan does not promise a create or rename that the apply would refuse.
+// Only plans that create the resource or change its name or domain call the
+// API; when the listing fails, planning proceeds and the apply-time guard
+// decides.
+func (r *appDNSClassificationResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var plan appDNSClassificationResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.Domain.IsUnknown() || plan.Domain.IsNull() || plan.Name.IsUnknown() || plan.Name.IsNull() {
+		return
+	}
+
+	renaming := false
+	checkDomain := true
+	ignoreDomains := []string{plan.Domain.ValueString()}
+	if !req.State.Raw.IsNull() {
+		var state appDNSClassificationResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if plan.Domain.ValueString() == state.Domain.ValueString() && plan.Name.ValueString() == state.Name.ValueString() {
+			return
+		}
+		renaming = true
+		// The state's own entry never counts as a collision.
+		checkDomain = !strings.EqualFold(plan.Domain.ValueString(), state.Domain.ValueString())
+		ignoreDomains = append(ignoreDomains, state.Domain.ValueString())
+	}
+
+	existing, err := r.client.GetDNSClassifications()
+	if err != nil {
+		resp.Diagnostics.AddWarning(
+			"Could not check DNS classification names during planning",
+			"Listing DNS classifications failed: "+err.Error()+
+				"\n\nThe duplicate check runs again during apply.",
+		)
+		return
+	}
+	if checkDomain {
+		for i := range existing {
+			if strings.EqualFold(existing[i].Domain, plan.Domain.ValueString()) {
+				summary, detail := dnsDomainExistsError(&existing[i])
+				resp.Diagnostics.AddAttributeError(path.Root("domain"), summary, detail)
+				return
+			}
+		}
+	}
+	if dup := findDNSByName(existing, plan.Name.ValueString(), ignoreDomains...); dup != nil {
+		summary, detail := dnsDuplicateNameError(dup, renaming)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
+	}
+}
+
+// Create creates the resource and sets the initial Terraform state.
+//
+// The Orchestrator keys DNS classifications by domain and treats the create
+// call as an upsert: posting an existing domain would silently overwrite its
+// definition. Names are not enforced to be unique either, and overlay ACLs
+// and policies reference applications by name. Both collisions are
+// therefore rejected.
 func (r *appDNSClassificationResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan appDNSClassificationResourceModel
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	existing, err := r.client.GetDNSClassifications()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error checking existing DNS classifications",
+			"Could not list DNS classifications: "+err.Error(),
+		)
+		return
+	}
+	for i := range existing {
+		if strings.EqualFold(existing[i].Domain, plan.Domain.ValueString()) {
+			summary, detail := dnsDomainExistsError(&existing[i])
+			resp.Diagnostics.AddAttributeError(path.Root("domain"), summary, detail)
+			return
+		}
+	}
+	if dup := findDNSByName(existing, plan.Name.ValueString(), plan.Domain.ValueString()); dup != nil {
+		summary, detail := dnsDuplicateNameError(dup, false)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
 		return
 	}
 
@@ -125,7 +267,7 @@ func (r *appDNSClassificationResource) Create(ctx context.Context, req resource.
 		Disabled:    plan.Disabled.ValueBool(),
 	}
 
-	err := r.client.CreateDNSClassification(def)
+	err = r.client.CreateDNSClassification(def)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating DNS classification",
@@ -185,6 +327,21 @@ func (r *appDNSClassificationResource) Update(ctx context.Context, req resource.
 		return
 	}
 
+	// Renaming must not collide with another definition either.
+	existing, err := r.client.GetDNSClassifications()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error checking existing DNS classifications",
+			"Could not list DNS classifications: "+err.Error(),
+		)
+		return
+	}
+	if dup := findDNSByName(existing, plan.Name.ValueString(), plan.Domain.ValueString()); dup != nil {
+		summary, detail := dnsDuplicateNameError(dup, true)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
+		return
+	}
+
 	def := client.DNSClassification{
 		Name:        plan.Name.ValueString(),
 		Domain:      plan.Domain.ValueString(),
@@ -193,7 +350,7 @@ func (r *appDNSClassificationResource) Update(ctx context.Context, req resource.
 		Disabled:    plan.Disabled.ValueBool(),
 	}
 
-	err := r.client.UpdateDNSClassification(def)
+	err = r.client.UpdateDNSClassification(def)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating DNS classification",

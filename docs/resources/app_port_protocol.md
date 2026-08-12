@@ -10,6 +10,8 @@ description: |-
 
 Manages a port/protocol application classification in the Aruba SD-WAN Orchestrator. Uses the /gms/rest/applicationDefinition/portProtocolClassification API endpoints.
 
+!> **Existing port/protocol pairs and duplicate names are rejected.** The Orchestrator keys these classifications by the port and protocol pair and treats the create call as an upsert, so creating an existing pair would silently overwrite its definition — import it instead (`terraform import ... <port>_<protocol>`). Names are not enforced to be unique either; creating (or renaming to) a name another port/protocol classification already uses aborts — already at plan time — because overlay ACLs and policies reference applications by name.
+
 ## Example Usage
 
 ```terraform

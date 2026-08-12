@@ -10,6 +10,8 @@ description: |-
 
 Manages a compound match-based application definition in the Aruba SD-WAN Orchestrator. Uses the /gms/rest/applicationDefinition/compoundClassification API endpoints.
 
+!> **Duplicate names are rejected.** The Orchestrator does not enforce unique application names, and overlay ACLs and policies reference applications by name — duplicates make those references ambiguous. Creating (or renaming to) a name that a user-defined compound classification already uses therefore aborts — already at plan time — with a pointer to `terraform import`.
+
 ## Example Usage
 
 ```terraform

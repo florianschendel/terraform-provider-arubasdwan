@@ -32,6 +32,9 @@ https://developer.arubanetworks.com/edgeconnect/reference/
   - `arubasdwan_ip_address_groups` (data source): List all IP address groups
 - **VRF Segments** — read VRF segments and resolve segment pairs by name
   - `arubasdwan_vrf_segments` (data source): List all VRF segments and optionally resolve a segment pair from VRF names
+- **Business Intent Overlays (BIO)** — read overlays and attach applications/application groups to them
+  - `arubasdwan_overlays` (data source): List all overlays with their traffic matching (interface label, appliance ACL, or built-in overlay ACL including its entries)
+  - `arubasdwan_overlay_acl` (resource): Manage the ACL built into an overlay — attach applications (DNS, compound, port/protocol) and application groups, and match on IP, ports, protocol, DSCP, DNS, services, address groups, or VRF
 - **Appliance Inventory** — read appliances and their deployment for documentation/export use cases
   - `arubasdwan_appliance_deployments` (data source): List all appliances with hostname, serial number, and every configured IP interface (mgmt, WAN, LAN, VLAN sub-interfaces, loopbacks) including interface label, VRF segment, security zone, firewall mode, bandwidth limits, and the public IP discovered by the Orchestrator for WAN interfaces behind NAT. Also reports the SD-WAN region, applied template groups, Business Intent Overlays (BIO), locally configured static routes, EC license, system bandwidth, and the DHCP server/relay configuration of LAN interfaces per appliance
 - **VRRP** — read the VRRP configuration of the appliances for documentation/export use cases
@@ -188,6 +191,8 @@ output "zones" {
 
 Manages a user-defined application based on port/protocol classification on the Orchestrator. Application definitions can be referenced by name in security policies and application groups.
 
+> Creating a port/protocol pair that already exists on the Orchestrator is rejected (already at plan time) (the API would silently overwrite it) — import it instead. Duplicate names across port/protocol classifications are rejected as well, since policies reference applications by name.
+
 ### Arguments
 
 | Argument      | Type   | Required | Default | Description                                                      |
@@ -273,6 +278,8 @@ output "custom_apps" {
 
 Manages a DNS/domain-based application definition. Applications are matched by domain name pattern.
 
+> Creating a domain that already exists on the Orchestrator is rejected (already at plan time) (the API would silently overwrite it) — import it instead. Duplicate names across DNS classifications are rejected as well, since policies reference applications by name.
+
 ### Arguments
 
 | Argument      | Type   | Required | Default | Description                                              |
@@ -343,6 +350,8 @@ output "dns_apps" {
 ## Resource: `arubasdwan_app_compound_classification`
 
 Manages a compound match-based application definition. Supports matching on any combination of IP, port, protocol, DNS, geo location, service, DSCP, and VLAN/interface.
+
+> The Orchestrator does not enforce unique names, so creating (or renaming to) a name that a user-defined compound classification already uses is rejected (already at plan time) — it would add a duplicate definition, and policies reference applications by name. Import the existing definition instead.
 
 ### Arguments
 
@@ -509,6 +518,8 @@ Request body: `{"pattern": "<substring>", "limit": <int>}`. Response: flat JSON 
 ## Resource: `arubasdwan_application_group`
 
 Manages a user-defined application group on the Orchestrator. Application groups bundle multiple applications together and can be referenced by name in security policies via the `app_group` match field.
+
+> Creating a group whose name already exists on the Orchestrator is rejected (already at plan time) — groups are keyed by name, so the API would silently replace the existing member list. Import the existing group instead.
 
 ### Arguments
 
@@ -1142,6 +1153,133 @@ output "remote_as_numbers" {
   ]))
 }
 ```
+
+---
+
+## Data Source: `arubasdwan_overlays`
+
+Retrieves all Business Intent Overlays (BIO) via `GET /gms/rest/gms/overlays/config`, including how each overlay selects traffic and, for the ACL built into an overlay, its individual entries.
+
+### Attributes
+
+| Attribute  | Type | Description                            |
+|------------|------|----------------------------------------|
+| `overlays` | list | List of overlay objects, sorted by ID  |
+
+Each object in `overlays` contains:
+
+| Field             | Type   | Description                                                                 |
+|-------------------|--------|-----------------------------------------------------------------------------|
+| `id`              | int64  | Numeric overlay ID                                                          |
+| `name`            | string | Overlay name (e.g. `"Business"`)                                            |
+| `match_type`      | string | `"overlay_acl"`, `"appliance_acl"`, `"interface_label"`, or empty           |
+| `interface_label` | string | LAN interface label (only for `interface_label`)                            |
+| `acl_name`        | string | ACL name (for `overlay_acl` / `appliance_acl`)                              |
+| `acl_entries`     | list   | Entries of the built-in ACL: `sequence`, `permit`, `match_all`, `application`, `app_group`, `comment` |
+| `acl_raw`         | string | The built-in ACL exactly as stored by the Orchestrator                      |
+
+### Example
+
+```hcl
+data "arubasdwan_overlays" "all" {}
+
+output "overlay_matching" {
+  value = {
+    for o in data.arubasdwan_overlays.all.overlays : o.name => {
+      id         = o.id
+      match_type = o.match_type
+      entries = [
+        for e in o.acl_entries :
+        "${e.sequence}: ${e.permit ? "permit" : "deny"} ${e.match_all ? "all" : coalesce(e.application, e.app_group, "")}"
+      ]
+    }
+  }
+}
+```
+
+---
+
+## Resource: `arubasdwan_overlay_acl`
+
+Manages the ACL built into a Business Intent Overlay — the rules that decide which traffic the overlay carries. Each entry matches an **application**, an **application group**, or **all traffic**, so applications and groups managed by this provider can be attached to an overlay.
+
+The overlay itself must already exist. Only its match configuration is replaced (`PUT /gms/rest/gms/overlays/config?overlayId=<id>`): the overlay is re-read immediately before each write and every other setting — bonding policy, topology, WAN ports, internet policy, and anything this provider does not model — is written back unchanged.
+
+Works on Orchestrator 9.6.3 and 9.7.0; the overlay API is identical in both.
+
+### Arguments
+
+| Argument       | Type   | Required | Description                                                              |
+|----------------|--------|----------|--------------------------------------------------------------------------|
+| `overlay_name` | string | yes      | Name of the existing overlay whose ACL is managed (forces replacement)   |
+| `entries`      | set    | yes      | The ACL entries; order in the configuration is irrelevant (see below)    |
+| `acl_name`     | string | no       | ACL name inside the overlay; defaults to the existing one or `Overlay_<overlay_name>` |
+| `allow_entry_removal` | bool | no | Confirm removal of entries Terraform never created (default `false` = abort). Not needed for removing entries this resource created itself |
+
+Each object in `entries` (a set — the `sequence` attribute determines the evaluation order, not the position in the configuration):
+
+| Field         | Type   | Required | Description                                                                  |
+|---------------|--------|----------|------------------------------------------------------------------------------|
+| `sequence`    | int64  | yes      | Evaluation order within the ACL; must be unique                              |
+| `permit`      | bool   | no       | Carry matching traffic in this overlay (default `true`; `false` = deny)      |
+| `match_all`   | bool   | no       | Explicit catch-all; cannot be combined with other criteria (default `false`) |
+| `comment`     | string | no       | Free-form comment                                                            |
+
+Match criteria (all optional, combined with AND within one entry): `application`, `app_group`, `src_ip`, `dst_ip`, `either_ip`, `src_port`, `dst_port`, `either_port`, `protocol`, `dscp`, `src_dns`, `dst_dns`, `either_dns`, `src_service`, `dst_service`, `either_service`, `src_address_group`, `dst_address_group`, `either_address_group`, `src_vrf`, `dst_vrf`. Multi-value fields take comma-separated lists.
+
+> Each entry needs at least one match criterion, or `match_all = true`.
+
+> **The resource owns the overlay's complete ACL and refuses to delete entries it never created.** Removing an entry a previous apply created is a deliberate change and proceeds with a warning. An entry that appeared without Terraform — a rule added in the UI, say — aborts plan and apply; adopt it by adding it to `entries`, or set `allow_entry_removal = true` to confirm its removal. Removals are always reported as a warning, because Terraform's plan summary counts resources rather than ACL entries. For an overlay that already has entries, import it first (`terraform import arubasdwan_overlay_acl.<name> <overlay_name>`) and review the plan; creating the resource for a populated overlay is rejected with an error. The ACL's `options` object and entry fields this provider does not model are preserved across updates.
+
+### Attributes
+
+| Attribute    | Type   | Description                          |
+|--------------|--------|--------------------------------------|
+| `id`         | string | Resource identifier (overlay name)   |
+| `overlay_id` | int64  | Numeric overlay ID                   |
+
+### Example
+
+```hcl
+resource "arubasdwan_application_group" "critical" {
+  name = "CriticalApps"
+  apps = ["salesforce", "office365"]
+}
+
+resource "arubasdwan_app_dns_classification" "internal_crm" {
+  name   = "internal-crm"
+  domain = "crm.example.com"
+}
+
+resource "arubasdwan_overlay_acl" "business" {
+  overlay_name = "Business"
+
+  entries = [
+    {
+      sequence  = 10
+      app_group = arubasdwan_application_group.critical.name
+      comment   = "business critical applications"
+    },
+    {
+      sequence    = 20
+      application = arubasdwan_app_dns_classification.internal_crm.name
+    },
+    {
+      sequence    = 30
+      application = "bittorrent"
+      permit      = false
+    },
+  ]
+}
+```
+
+### Import
+
+```bash
+terraform import arubasdwan_overlay_acl.business Business
+```
+
+> **Destroying the resource resets the overlay to matching all traffic** (a single `match_all` entry) — the state of a freshly created overlay. The overlay itself is never deleted.
 
 ---
 

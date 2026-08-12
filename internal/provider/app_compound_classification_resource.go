@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/florianschendel/terraform-provider-arubasdwan/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -21,6 +22,7 @@ import (
 var (
 	_ resource.Resource                = &appCompoundClassificationResource{}
 	_ resource.ResourceWithImportState = &appCompoundClassificationResource{}
+	_ resource.ResourceWithModifyPlan  = &appCompoundClassificationResource{}
 )
 
 // appCompoundClassificationResourceModel maps the resource schema data.
@@ -205,7 +207,94 @@ func compoundStateFromDef(def *client.CompoundClassification) appCompoundClassif
 	}
 }
 
+// findCompoundByName returns the first classification whose name matches
+// (compared case-insensitively), ignoring the entry with ignoreID; nil when
+// there is none. Pass a negative ignoreID to consider every entry.
+func findCompoundByName(defs []client.CompoundClassification, name string, ignoreID int) *client.CompoundClassification {
+	for i := range defs {
+		if defs[i].ID != ignoreID && strings.EqualFold(defs[i].Name, name) {
+			return &defs[i]
+		}
+	}
+	return nil
+}
+
+// compoundDuplicateError builds the diagnostic for a name collision with an
+// existing classification.
+func compoundDuplicateError(dup *client.CompoundClassification, renaming bool) (string, string) {
+	summary := "Compound classification name already in use"
+	if renaming {
+		return summary, fmt.Sprintf(
+			"Another user-defined compound classification named %q already exists on the "+
+				"Orchestrator (ID %d). Renaming this one to the same name would create a duplicate. "+
+				"Choose a different name.",
+			dup.Name, dup.ID,
+		)
+	}
+	return summary, fmt.Sprintf(
+		"A user-defined compound classification named %q already exists on the Orchestrator "+
+			"(ID %d). The Orchestrator does not enforce unique names, so applying would create a "+
+			"duplicate definition — and overlay ACLs and policies reference applications by name, "+
+			"which makes duplicates ambiguous.\n\n"+
+			"If Terraform should manage the existing definition, import it:\n\n"+
+			"  terraform import arubasdwan_app_compound_classification.<name> %d\n\n"+
+			"To define a separate application, choose a different name.",
+		dup.Name, dup.ID, dup.ID,
+	)
+}
+
+// ModifyPlan runs the duplicate-name check already at plan time, so a plan
+// does not promise a create or rename that the apply would refuse. Only
+// plans that create the resource or change its name call the API; when the
+// listing fails, planning proceeds and the apply-time guard decides.
+func (r *appCompoundClassificationResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var plan appCompoundClassificationResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() || plan.Name.IsUnknown() || plan.Name.IsNull() {
+		return
+	}
+
+	renaming := false
+	ignoreID := -1
+	if !req.State.Raw.IsNull() {
+		var state appCompoundClassificationResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if plan.Name.ValueString() == state.Name.ValueString() {
+			return
+		}
+		renaming = true
+		if id, err := strconv.Atoi(state.ID.ValueString()); err == nil {
+			ignoreID = id
+		}
+	}
+
+	existing, err := r.client.GetCompoundClassifications()
+	if err != nil {
+		resp.Diagnostics.AddWarning(
+			"Could not check compound classification names during planning",
+			"Listing compound classifications failed: "+err.Error()+
+				"\n\nThe duplicate check runs again during apply.",
+		)
+		return
+	}
+	if dup := findCompoundByName(existing, plan.Name.ValueString(), ignoreID); dup != nil {
+		summary, detail := compoundDuplicateError(dup, renaming)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
+	}
+}
+
 // Create creates the resource and sets the initial Terraform state.
+//
+// The Orchestrator does not enforce unique application names, so creating a
+// definition whose name is already taken would silently add a duplicate —
+// and overlay ACLs and policies reference applications by name, which makes
+// duplicates ambiguous. Such a create is therefore rejected.
 func (r *appCompoundClassificationResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan appCompoundClassificationResourceModel
 	diags := req.Plan.Get(ctx, &plan)
@@ -214,9 +303,23 @@ func (r *appCompoundClassificationResource) Create(ctx context.Context, req reso
 		return
 	}
 
+	existing, err := r.client.GetCompoundClassifications()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error checking existing compound classifications",
+			"Could not list compound classifications: "+err.Error(),
+		)
+		return
+	}
+	if dup := findCompoundByName(existing, plan.Name.ValueString(), -1); dup != nil {
+		summary, detail := compoundDuplicateError(dup, false)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
+		return
+	}
+
 	def := compoundModelFromPlan(plan)
 
-	err := r.client.CreateCompoundClassification(&def)
+	err = r.client.CreateCompoundClassification(&def)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating compound classification",
@@ -284,6 +387,21 @@ func (r *appCompoundClassificationResource) Update(ctx context.Context, req reso
 			"Error parsing compound classification ID",
 			fmt.Sprintf("Invalid ID %q: %s", plan.ID.ValueString(), err.Error()),
 		)
+		return
+	}
+
+	// Renaming must not collide with another definition either.
+	existing, err := r.client.GetCompoundClassifications()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error checking existing compound classifications",
+			"Could not list compound classifications: "+err.Error(),
+		)
+		return
+	}
+	if dup := findCompoundByName(existing, plan.Name.ValueString(), id); dup != nil {
+		summary, detail := compoundDuplicateError(dup, true)
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
 		return
 	}
 

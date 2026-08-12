@@ -10,6 +10,8 @@ description: |-
 
 Manages an application group (tag) in the Aruba SD-WAN Orchestrator. Uses the /gms/rest/applicationDefinition/applicationTags API endpoints.
 
+!> **Duplicate names are rejected.** The Orchestrator keys application groups by name, so creating a group whose name already exists would silently replace the existing group's member list — and overlay ACLs and policies reference groups by name. Creating (or renaming to, which replaces the resource) a name that is already taken therefore aborts — already at plan time — with a pointer to `terraform import`.
+
 ## Example Usage
 
 ```terraform

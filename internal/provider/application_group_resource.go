@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/florianschendel/terraform-provider-arubasdwan/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -16,6 +17,7 @@ import (
 // Ensure the implementation satisfies the expected interfaces.
 var (
 	_ resource.Resource                = &applicationGroupResource{}
+	_ resource.ResourceWithModifyPlan  = &applicationGroupResource{}
 	_ resource.ResourceWithImportState = &applicationGroupResource{}
 )
 
@@ -88,12 +90,100 @@ func (r *applicationGroupResource) Configure(_ context.Context, req resource.Con
 	r.client = apiClient
 }
 
+// applicationGroupDuplicateError builds the diagnostic for a name collision
+// with an existing group.
+func applicationGroupDuplicateError(existingName, plannedName string) (string, string) {
+	consequence := "Groups are keyed by name, so applying would silently replace the existing group's member list."
+	if existingName != plannedName {
+		consequence = "Applying would add a second group whose name differs only in case, which makes references by name ambiguous."
+	}
+	return "Application group name already in use", fmt.Sprintf(
+		"An application group named %q already exists on the Orchestrator. %s\n\n"+
+			"If Terraform should manage the existing group, import it:\n\n"+
+			"  terraform import arubasdwan_application_group.<name> %s\n\n"+
+			"To define a separate group, choose a different name.",
+		existingName, consequence, existingName,
+	)
+}
+
+// ModifyPlan runs the duplicate-name check already at plan time, so a plan
+// does not promise a create the apply would refuse. Name changes replace the
+// resource, so the create leg covers renames as well. Only plans that create
+// the resource call the API; when the listing fails, planning proceeds and
+// the apply-time guard decides.
+func (r *applicationGroupResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var plan applicationGroupResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() || plan.Name.IsUnknown() || plan.Name.IsNull() {
+		return
+	}
+
+	// The state's own name never counts as a collision; a genuine rename
+	// replaces the resource, and the old group is destroyed in the process.
+	ignoreName := ""
+	if !req.State.Raw.IsNull() {
+		var state applicationGroupResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if plan.Name.ValueString() == state.Name.ValueString() {
+			return
+		}
+		ignoreName = state.Name.ValueString()
+	}
+
+	existing, err := r.client.GetApplicationGroups()
+	if err != nil {
+		resp.Diagnostics.AddWarning(
+			"Could not check application group names during planning",
+			"Listing application groups failed: "+err.Error()+
+				"\n\nThe duplicate check runs again during apply.",
+		)
+		return
+	}
+	for i := range existing {
+		if existing[i].Name == ignoreName || !strings.EqualFold(existing[i].Name, plan.Name.ValueString()) {
+			continue
+		}
+		summary, detail := applicationGroupDuplicateError(existing[i].Name, plan.Name.ValueString())
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
+		return
+	}
+}
+
 // Create creates the resource and sets the initial Terraform state.
+//
+// The Orchestrator keys application groups by name: creating a group whose
+// name is already taken would silently replace the existing group's member
+// list — and overlay ACLs and policies reference groups by name. Such a
+// create is therefore rejected, like for the application classification
+// resources.
 func (r *applicationGroupResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan applicationGroupResourceModel
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	existing, err := r.client.GetApplicationGroups()
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error checking existing application groups",
+			"Could not list application groups: "+err.Error(),
+		)
+		return
+	}
+	for i := range existing {
+		if !strings.EqualFold(existing[i].Name, plan.Name.ValueString()) {
+			continue
+		}
+		summary, detail := applicationGroupDuplicateError(existing[i].Name, plan.Name.ValueString())
+		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
 		return
 	}
 
@@ -109,7 +199,7 @@ func (r *applicationGroupResource) Create(ctx context.Context, req resource.Crea
 		Apps: apps,
 	}
 
-	err := r.client.CreateApplicationGroup(group)
+	err = r.client.CreateApplicationGroup(group)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating application group",

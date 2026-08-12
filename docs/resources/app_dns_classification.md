@@ -10,6 +10,8 @@ description: |-
 
 Manages a DNS domain-based application definition in the Aruba SD-WAN Orchestrator. Uses the /gms/rest/applicationDefinition/dnsClassification API endpoints.
 
+!> **Existing domains and duplicate names are rejected.** The Orchestrator keys DNS classifications by domain and treats the create call as an upsert, so creating a domain that already exists would silently overwrite its definition — import it instead. Names are not enforced to be unique either; creating (or renaming to) a name another DNS classification already uses aborts — already at plan time — because overlay ACLs and policies reference applications by name.
+
 ## Example Usage
 
 ```terraform

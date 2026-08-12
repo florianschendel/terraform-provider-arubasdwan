@@ -7,17 +7,17 @@ import (
 	"strings"
 
 	"github.com/florianschendel/terraform-provider-arubasdwan/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
-	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 )
 
 // Compile-time interface checks for the security policy resource.
@@ -445,33 +445,33 @@ func modelToPolicy(m *securityPolicyResourceModel) client.SecurityPolicy {
 	}
 
 	return client.SecurityPolicy{
-		SourceZoneID:  int(m.SourceZoneID.ValueInt64()),
-		DestZoneID:    int(m.DestZoneID.ValueInt64()),
-		Priority:      int(m.Priority.ValueInt64()),
-		Action:        m.Action.ValueString(),
-		RuleState:     ruleState,
-		Logging:       logging,
-		LogPriority:   logPriority,
-		Comment:       m.Comment.ValueString(),
-		ACL:           m.ACL.ValueString(),
-		SrcIP:         m.SrcIP.ValueString(),
-		DstIP:         m.DstIP.ValueString(),
-		EitherIP:      m.EitherIP.ValueString(),
-		SrcPort:       m.SrcPort.ValueString(),
-		DstPort:       m.DstPort.ValueString(),
-		EitherPort:    m.EitherPort.ValueString(),
-		Protocol:      m.Protocol.ValueString(),
-		Application:   m.Application.ValueString(),
-		AppGroup:      m.AppGroup.ValueString(),
-		SrcDNS:        m.SrcDNS.ValueString(),
-		DstDNS:        m.DstDNS.ValueString(),
-		EitherDNS:     m.EitherDNS.ValueString(),
-		SrcGeo:        m.SrcGeo.ValueString(),
-		DstGeo:        m.DstGeo.ValueString(),
-		EitherGeo:     m.EitherGeo.ValueString(),
-		SrcService:    m.SrcService.ValueString(),
-		DstService:    m.DstService.ValueString(),
-		EitherService: m.EitherService.ValueString(),
+		SourceZoneID:       int(m.SourceZoneID.ValueInt64()),
+		DestZoneID:         int(m.DestZoneID.ValueInt64()),
+		Priority:           int(m.Priority.ValueInt64()),
+		Action:             m.Action.ValueString(),
+		RuleState:          ruleState,
+		Logging:            logging,
+		LogPriority:        logPriority,
+		Comment:            m.Comment.ValueString(),
+		ACL:                m.ACL.ValueString(),
+		SrcIP:              m.SrcIP.ValueString(),
+		DstIP:              m.DstIP.ValueString(),
+		EitherIP:           m.EitherIP.ValueString(),
+		SrcPort:            m.SrcPort.ValueString(),
+		DstPort:            m.DstPort.ValueString(),
+		EitherPort:         m.EitherPort.ValueString(),
+		Protocol:           m.Protocol.ValueString(),
+		Application:        m.Application.ValueString(),
+		AppGroup:           m.AppGroup.ValueString(),
+		SrcDNS:             m.SrcDNS.ValueString(),
+		DstDNS:             m.DstDNS.ValueString(),
+		EitherDNS:          m.EitherDNS.ValueString(),
+		SrcGeo:             m.SrcGeo.ValueString(),
+		DstGeo:             m.DstGeo.ValueString(),
+		EitherGeo:          m.EitherGeo.ValueString(),
+		SrcService:         m.SrcService.ValueString(),
+		DstService:         m.DstService.ValueString(),
+		EitherService:      m.EitherService.ValueString(),
 		DSCP:               m.DSCP.ValueString(),
 		VLAN:               m.VLAN.ValueString(),
 		Overlay:            m.Overlay.ValueString(),
@@ -486,35 +486,35 @@ func modelToPolicy(m *securityPolicyResourceModel) client.SecurityPolicy {
 // in Terraform state. It also constructs the composite ID.
 func policyToModel(p *client.SecurityPolicy, segmentPair string) securityPolicyResourceModel {
 	return securityPolicyResourceModel{
-		ID:            types.StringValue(compositeID(segmentPair, p.SourceZoneID, p.DestZoneID, p.Priority)),
-		SegmentPair:   types.StringValue(segmentPair),
-		SourceZoneID:  types.Int64Value(int64(p.SourceZoneID)),
-		DestZoneID:    types.Int64Value(int64(p.DestZoneID)),
-		Priority:      types.Int64Value(int64(p.Priority)),
-		Action:        types.StringValue(p.Action),
-		RuleState:     types.StringValue(p.RuleState),
-		Logging:       types.StringValue(p.Logging),
-		LogPriority:   types.StringValue(p.LogPriority),
-		Comment:       types.StringValue(p.Comment),
-		ACL:           types.StringValue(p.ACL),
-		SrcIP:         types.StringValue(p.SrcIP),
-		DstIP:         types.StringValue(p.DstIP),
-		EitherIP:      types.StringValue(p.EitherIP),
-		SrcPort:       types.StringValue(p.SrcPort),
-		DstPort:       types.StringValue(p.DstPort),
-		EitherPort:    types.StringValue(p.EitherPort),
-		Protocol:      types.StringValue(p.Protocol),
-		Application:   types.StringValue(p.Application),
-		AppGroup:      types.StringValue(p.AppGroup),
-		SrcDNS:        types.StringValue(p.SrcDNS),
-		DstDNS:        types.StringValue(p.DstDNS),
-		EitherDNS:     types.StringValue(p.EitherDNS),
-		SrcGeo:        types.StringValue(p.SrcGeo),
-		DstGeo:        types.StringValue(p.DstGeo),
-		EitherGeo:     types.StringValue(p.EitherGeo),
-		SrcService:    types.StringValue(p.SrcService),
-		DstService:    types.StringValue(p.DstService),
-		EitherService: types.StringValue(p.EitherService),
+		ID:                 types.StringValue(compositeID(segmentPair, p.SourceZoneID, p.DestZoneID, p.Priority)),
+		SegmentPair:        types.StringValue(segmentPair),
+		SourceZoneID:       types.Int64Value(int64(p.SourceZoneID)),
+		DestZoneID:         types.Int64Value(int64(p.DestZoneID)),
+		Priority:           types.Int64Value(int64(p.Priority)),
+		Action:             types.StringValue(p.Action),
+		RuleState:          types.StringValue(p.RuleState),
+		Logging:            types.StringValue(p.Logging),
+		LogPriority:        types.StringValue(p.LogPriority),
+		Comment:            types.StringValue(p.Comment),
+		ACL:                types.StringValue(p.ACL),
+		SrcIP:              types.StringValue(p.SrcIP),
+		DstIP:              types.StringValue(p.DstIP),
+		EitherIP:           types.StringValue(p.EitherIP),
+		SrcPort:            types.StringValue(p.SrcPort),
+		DstPort:            types.StringValue(p.DstPort),
+		EitherPort:         types.StringValue(p.EitherPort),
+		Protocol:           types.StringValue(p.Protocol),
+		Application:        types.StringValue(p.Application),
+		AppGroup:           types.StringValue(p.AppGroup),
+		SrcDNS:             types.StringValue(p.SrcDNS),
+		DstDNS:             types.StringValue(p.DstDNS),
+		EitherDNS:          types.StringValue(p.EitherDNS),
+		SrcGeo:             types.StringValue(p.SrcGeo),
+		DstGeo:             types.StringValue(p.DstGeo),
+		EitherGeo:          types.StringValue(p.EitherGeo),
+		SrcService:         types.StringValue(p.SrcService),
+		DstService:         types.StringValue(p.DstService),
+		EitherService:      types.StringValue(p.EitherService),
 		DSCP:               types.StringValue(p.DSCP),
 		VLAN:               types.StringValue(p.VLAN),
 		Overlay:            types.StringValue(p.Overlay),

@@ -20,33 +20,33 @@ var (
 // It contains the same fields as the resource model but without the composite ID
 // and segment_pair (since those are provided as input to the data source).
 type securityPolicyDSModel struct {
-	SourceZoneID  types.Int64  `tfsdk:"source_zone_id"`
-	DestZoneID    types.Int64  `tfsdk:"dest_zone_id"`
-	Priority      types.Int64  `tfsdk:"priority"`
-	Action        types.String `tfsdk:"action"`
-	RuleState     types.String `tfsdk:"rule_state"`
-	Logging       types.String `tfsdk:"logging"`
-	LogPriority   types.String `tfsdk:"log_priority"`
-	Comment       types.String `tfsdk:"comment"`
-	ACL           types.String `tfsdk:"acl"`
-	SrcIP         types.String `tfsdk:"src_ip"`
-	DstIP         types.String `tfsdk:"dst_ip"`
-	EitherIP      types.String `tfsdk:"either_ip"`
-	SrcPort       types.String `tfsdk:"src_port"`
-	DstPort       types.String `tfsdk:"dst_port"`
-	EitherPort    types.String `tfsdk:"either_port"`
-	Protocol      types.String `tfsdk:"protocol"`
-	Application   types.String `tfsdk:"application"`
-	AppGroup      types.String `tfsdk:"app_group"`
-	SrcDNS        types.String `tfsdk:"src_dns"`
-	DstDNS        types.String `tfsdk:"dst_dns"`
-	EitherDNS     types.String `tfsdk:"either_dns"`
-	SrcGeo        types.String `tfsdk:"src_geo"`
-	DstGeo        types.String `tfsdk:"dst_geo"`
-	EitherGeo     types.String `tfsdk:"either_geo"`
-	SrcService    types.String `tfsdk:"src_service"`
-	DstService    types.String `tfsdk:"dst_service"`
-	EitherService types.String `tfsdk:"either_service"`
+	SourceZoneID       types.Int64  `tfsdk:"source_zone_id"`
+	DestZoneID         types.Int64  `tfsdk:"dest_zone_id"`
+	Priority           types.Int64  `tfsdk:"priority"`
+	Action             types.String `tfsdk:"action"`
+	RuleState          types.String `tfsdk:"rule_state"`
+	Logging            types.String `tfsdk:"logging"`
+	LogPriority        types.String `tfsdk:"log_priority"`
+	Comment            types.String `tfsdk:"comment"`
+	ACL                types.String `tfsdk:"acl"`
+	SrcIP              types.String `tfsdk:"src_ip"`
+	DstIP              types.String `tfsdk:"dst_ip"`
+	EitherIP           types.String `tfsdk:"either_ip"`
+	SrcPort            types.String `tfsdk:"src_port"`
+	DstPort            types.String `tfsdk:"dst_port"`
+	EitherPort         types.String `tfsdk:"either_port"`
+	Protocol           types.String `tfsdk:"protocol"`
+	Application        types.String `tfsdk:"application"`
+	AppGroup           types.String `tfsdk:"app_group"`
+	SrcDNS             types.String `tfsdk:"src_dns"`
+	DstDNS             types.String `tfsdk:"dst_dns"`
+	EitherDNS          types.String `tfsdk:"either_dns"`
+	SrcGeo             types.String `tfsdk:"src_geo"`
+	DstGeo             types.String `tfsdk:"dst_geo"`
+	EitherGeo          types.String `tfsdk:"either_geo"`
+	SrcService         types.String `tfsdk:"src_service"`
+	DstService         types.String `tfsdk:"dst_service"`
+	EitherService      types.String `tfsdk:"either_service"`
 	DSCP               types.String `tfsdk:"dscp"`
 	VLAN               types.String `tfsdk:"vlan"`
 	Overlay            types.String `tfsdk:"overlay"`
@@ -83,33 +83,33 @@ func (d *securityPoliciesDataSource) Metadata(_ context.Context, req datasource.
 
 func (d *securityPoliciesDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	policyAttrs := map[string]schema.Attribute{
-		"source_zone_id": schema.Int64Attribute{Computed: true, Description: "Source security zone ID."},
-		"dest_zone_id":   schema.Int64Attribute{Computed: true, Description: "Destination security zone ID."},
-		"priority":       schema.Int64Attribute{Computed: true, Description: "Rule priority."},
-		"action":         schema.StringAttribute{Computed: true, Description: "Action: allow or deny."},
-		"rule_state":     schema.StringAttribute{Computed: true, Description: "Rule state: enable or disable."},
-		"logging":        schema.StringAttribute{Computed: true, Description: "Logging: enable or disable."},
-		"log_priority":   schema.StringAttribute{Computed: true, Description: "Logging priority level."},
-		"comment":        schema.StringAttribute{Computed: true, Description: "Rule comment."},
-		"acl":            schema.StringAttribute{Computed: true, Description: "ACL class name."},
-		"src_ip":         schema.StringAttribute{Computed: true, Description: "Source IP match."},
-		"dst_ip":         schema.StringAttribute{Computed: true, Description: "Destination IP match."},
-		"either_ip":      schema.StringAttribute{Computed: true, Description: "Either IP match."},
-		"src_port":       schema.StringAttribute{Computed: true, Description: "Source port match."},
-		"dst_port":       schema.StringAttribute{Computed: true, Description: "Destination port match."},
-		"either_port":    schema.StringAttribute{Computed: true, Description: "Either port match."},
-		"protocol":       schema.StringAttribute{Computed: true, Description: "Protocol match."},
-		"application":    schema.StringAttribute{Computed: true, Description: "Application match."},
-		"app_group":      schema.StringAttribute{Computed: true, Description: "Application group match."},
-		"src_dns":        schema.StringAttribute{Computed: true, Description: "Source DNS match."},
-		"dst_dns":        schema.StringAttribute{Computed: true, Description: "Destination DNS match."},
-		"either_dns":     schema.StringAttribute{Computed: true, Description: "Either DNS match."},
-		"src_geo":        schema.StringAttribute{Computed: true, Description: "Source geo location match."},
-		"dst_geo":        schema.StringAttribute{Computed: true, Description: "Destination geo location match."},
-		"either_geo":     schema.StringAttribute{Computed: true, Description: "Either geo location match."},
-		"src_service":    schema.StringAttribute{Computed: true, Description: "Source service match."},
-		"dst_service":    schema.StringAttribute{Computed: true, Description: "Destination service match."},
-		"either_service": schema.StringAttribute{Computed: true, Description: "Either service match."},
+		"source_zone_id":       schema.Int64Attribute{Computed: true, Description: "Source security zone ID."},
+		"dest_zone_id":         schema.Int64Attribute{Computed: true, Description: "Destination security zone ID."},
+		"priority":             schema.Int64Attribute{Computed: true, Description: "Rule priority."},
+		"action":               schema.StringAttribute{Computed: true, Description: "Action: allow or deny."},
+		"rule_state":           schema.StringAttribute{Computed: true, Description: "Rule state: enable or disable."},
+		"logging":              schema.StringAttribute{Computed: true, Description: "Logging: enable or disable."},
+		"log_priority":         schema.StringAttribute{Computed: true, Description: "Logging priority level."},
+		"comment":              schema.StringAttribute{Computed: true, Description: "Rule comment."},
+		"acl":                  schema.StringAttribute{Computed: true, Description: "ACL class name."},
+		"src_ip":               schema.StringAttribute{Computed: true, Description: "Source IP match."},
+		"dst_ip":               schema.StringAttribute{Computed: true, Description: "Destination IP match."},
+		"either_ip":            schema.StringAttribute{Computed: true, Description: "Either IP match."},
+		"src_port":             schema.StringAttribute{Computed: true, Description: "Source port match."},
+		"dst_port":             schema.StringAttribute{Computed: true, Description: "Destination port match."},
+		"either_port":          schema.StringAttribute{Computed: true, Description: "Either port match."},
+		"protocol":             schema.StringAttribute{Computed: true, Description: "Protocol match."},
+		"application":          schema.StringAttribute{Computed: true, Description: "Application match."},
+		"app_group":            schema.StringAttribute{Computed: true, Description: "Application group match."},
+		"src_dns":              schema.StringAttribute{Computed: true, Description: "Source DNS match."},
+		"dst_dns":              schema.StringAttribute{Computed: true, Description: "Destination DNS match."},
+		"either_dns":           schema.StringAttribute{Computed: true, Description: "Either DNS match."},
+		"src_geo":              schema.StringAttribute{Computed: true, Description: "Source geo location match."},
+		"dst_geo":              schema.StringAttribute{Computed: true, Description: "Destination geo location match."},
+		"either_geo":           schema.StringAttribute{Computed: true, Description: "Either geo location match."},
+		"src_service":          schema.StringAttribute{Computed: true, Description: "Source service match."},
+		"dst_service":          schema.StringAttribute{Computed: true, Description: "Destination service match."},
+		"either_service":       schema.StringAttribute{Computed: true, Description: "Either service match."},
 		"dscp":                 schema.StringAttribute{Computed: true, Description: "DSCP match."},
 		"vlan":                 schema.StringAttribute{Computed: true, Description: "Interface/VLAN match."},
 		"overlay":              schema.StringAttribute{Computed: true, Description: "Overlay match."},
@@ -171,33 +171,33 @@ func (d *securityPoliciesDataSource) Read(ctx context.Context, req datasource.Re
 
 	for _, p := range policies {
 		state.SecurityPolicies = append(state.SecurityPolicies, securityPolicyDSModel{
-			SourceZoneID:  types.Int64Value(int64(p.SourceZoneID)),
-			DestZoneID:    types.Int64Value(int64(p.DestZoneID)),
-			Priority:      types.Int64Value(int64(p.Priority)),
-			Action:        types.StringValue(p.Action),
-			RuleState:     types.StringValue(p.RuleState),
-			Logging:       types.StringValue(p.Logging),
-			LogPriority:   types.StringValue(p.LogPriority),
-			Comment:       types.StringValue(p.Comment),
-			ACL:           types.StringValue(p.ACL),
-			SrcIP:         types.StringValue(p.SrcIP),
-			DstIP:         types.StringValue(p.DstIP),
-			EitherIP:      types.StringValue(p.EitherIP),
-			SrcPort:       types.StringValue(p.SrcPort),
-			DstPort:       types.StringValue(p.DstPort),
-			EitherPort:    types.StringValue(p.EitherPort),
-			Protocol:      types.StringValue(p.Protocol),
-			Application:   types.StringValue(p.Application),
-			AppGroup:      types.StringValue(p.AppGroup),
-			SrcDNS:        types.StringValue(p.SrcDNS),
-			DstDNS:        types.StringValue(p.DstDNS),
-			EitherDNS:     types.StringValue(p.EitherDNS),
-			SrcGeo:        types.StringValue(p.SrcGeo),
-			DstGeo:        types.StringValue(p.DstGeo),
-			EitherGeo:     types.StringValue(p.EitherGeo),
-			SrcService:    types.StringValue(p.SrcService),
-			DstService:    types.StringValue(p.DstService),
-			EitherService: types.StringValue(p.EitherService),
+			SourceZoneID:       types.Int64Value(int64(p.SourceZoneID)),
+			DestZoneID:         types.Int64Value(int64(p.DestZoneID)),
+			Priority:           types.Int64Value(int64(p.Priority)),
+			Action:             types.StringValue(p.Action),
+			RuleState:          types.StringValue(p.RuleState),
+			Logging:            types.StringValue(p.Logging),
+			LogPriority:        types.StringValue(p.LogPriority),
+			Comment:            types.StringValue(p.Comment),
+			ACL:                types.StringValue(p.ACL),
+			SrcIP:              types.StringValue(p.SrcIP),
+			DstIP:              types.StringValue(p.DstIP),
+			EitherIP:           types.StringValue(p.EitherIP),
+			SrcPort:            types.StringValue(p.SrcPort),
+			DstPort:            types.StringValue(p.DstPort),
+			EitherPort:         types.StringValue(p.EitherPort),
+			Protocol:           types.StringValue(p.Protocol),
+			Application:        types.StringValue(p.Application),
+			AppGroup:           types.StringValue(p.AppGroup),
+			SrcDNS:             types.StringValue(p.SrcDNS),
+			DstDNS:             types.StringValue(p.DstDNS),
+			EitherDNS:          types.StringValue(p.EitherDNS),
+			SrcGeo:             types.StringValue(p.SrcGeo),
+			DstGeo:             types.StringValue(p.DstGeo),
+			EitherGeo:          types.StringValue(p.EitherGeo),
+			SrcService:         types.StringValue(p.SrcService),
+			DstService:         types.StringValue(p.DstService),
+			EitherService:      types.StringValue(p.EitherService),
 			DSCP:               types.StringValue(p.DSCP),
 			VLAN:               types.StringValue(p.VLAN),
 			Overlay:            types.StringValue(p.Overlay),

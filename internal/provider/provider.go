@@ -188,6 +188,7 @@ func (p *arubasdwanProvider) DataSources(_ context.Context) []func() datasource.
 		NewVRFSegmentsDataSource,
 		NewApplianceDeploymentsDataSource,
 		NewVRRPInstancesDataSource,
+		NewOverlaysDataSource,
 		NewBGPConfigDataSource,
 	}
 }
@@ -211,5 +212,6 @@ func (p *arubasdwanProvider) Resources(_ context.Context) []func() resource.Reso
 		NewAppDNSClassificationResource,
 		NewAppCompoundClassificationResource,
 		NewIPAddressGroupResource,
+		NewOverlayACLResource,
 	}
 }
