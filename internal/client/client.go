@@ -739,11 +739,11 @@ type policyRuleSet struct {
 // returned by the GET endpoint. It combines match criteria, metadata, and action.
 type policyRuleEntry struct {
 	Match     policyRuleMatch `json:"match"`      // Traffic matching criteria
-	Self      int             `json:"self"`        // Self-referential ID (used internally by Orchestrator)
-	Misc      policyRuleMisc  `json:"misc"`        // Rule state and logging settings
-	Comment   string          `json:"comment"`     // User comment
-	GMSMarked bool            `json:"gms_marked"`  // Whether the rule was created by the Orchestrator (GMS)
-	Set       policyRuleSet   `json:"set"`         // The action to take (allow/deny)
+	Self      int             `json:"self"`       // Self-referential ID (used internally by Orchestrator)
+	Misc      policyRuleMisc  `json:"misc"`       // Rule state and logging settings
+	Comment   string          `json:"comment"`    // User comment
+	GMSMarked bool            `json:"gms_marked"` // Whether the rule was created by the Orchestrator (GMS)
+	Set       policyRuleSet   `json:"set"`        // The action to take (allow/deny)
 }
 
 // ===========================================================================
@@ -932,33 +932,33 @@ func parseSecurityPoliciesResponse(data []byte) ([]SecurityPolicy, error) {
 
 				// Convert the wire-format rule into our internal SecurityPolicy model.
 				policies = append(policies, SecurityPolicy{
-					SourceZoneID:  srcZone,
-					DestZoneID:    dstZone,
-					Priority:      prio,
-					Action:        rule.Set.Action,
-					RuleState:     rule.Misc.Rule,
-					Logging:       rule.Misc.Logging,
-					LogPriority:   rule.Misc.LoggingPriority.String(),
-					Comment:       rule.Comment,
-					ACL:           rule.Match.ACL,
-					SrcIP:         pipeToComma(rule.Match.SrcIP),
-					DstIP:         pipeToComma(rule.Match.DstIP),
-					EitherIP:      pipeToComma(rule.Match.EitherIP),
-					SrcPort:       pipeToComma(rule.Match.SrcPort),
-					DstPort:       pipeToComma(rule.Match.DstPort),
-					EitherPort:    pipeToComma(rule.Match.EitherPort),
-					Protocol:      rule.Match.Protocol,
-					Application:   rule.Match.Application,
-					AppGroup:      rule.Match.AppGroup,
-					SrcDNS:        rule.Match.SrcDNS,
-					DstDNS:        rule.Match.DstDNS,
-					EitherDNS:     rule.Match.EitherDNS,
-					SrcGeo:        rule.Match.SrcGeo,
-					DstGeo:        rule.Match.DstGeo,
-					EitherGeo:     rule.Match.EitherGeo,
-					SrcService:    rule.Match.SrcService,
-					DstService:    rule.Match.DstService,
-					EitherService: rule.Match.EitherService,
+					SourceZoneID:       srcZone,
+					DestZoneID:         dstZone,
+					Priority:           prio,
+					Action:             rule.Set.Action,
+					RuleState:          rule.Misc.Rule,
+					Logging:            rule.Misc.Logging,
+					LogPriority:        rule.Misc.LoggingPriority.String(),
+					Comment:            rule.Comment,
+					ACL:                rule.Match.ACL,
+					SrcIP:              pipeToComma(rule.Match.SrcIP),
+					DstIP:              pipeToComma(rule.Match.DstIP),
+					EitherIP:           pipeToComma(rule.Match.EitherIP),
+					SrcPort:            pipeToComma(rule.Match.SrcPort),
+					DstPort:            pipeToComma(rule.Match.DstPort),
+					EitherPort:         pipeToComma(rule.Match.EitherPort),
+					Protocol:           rule.Match.Protocol,
+					Application:        rule.Match.Application,
+					AppGroup:           rule.Match.AppGroup,
+					SrcDNS:             rule.Match.SrcDNS,
+					DstDNS:             rule.Match.DstDNS,
+					EitherDNS:          rule.Match.EitherDNS,
+					SrcGeo:             rule.Match.SrcGeo,
+					DstGeo:             rule.Match.DstGeo,
+					EitherGeo:          rule.Match.EitherGeo,
+					SrcService:         rule.Match.SrcService,
+					DstService:         rule.Match.DstService,
+					EitherService:      rule.Match.EitherService,
 					DSCP:               rule.Match.DSCP,
 					VLAN:               rule.Match.VLAN,
 					Overlay:            rule.Match.Overlay,
@@ -1115,25 +1115,25 @@ func buildSecurityPoliciesPayload(policies []SecurityPolicy) map[string]interfac
 		for prio, rule := range rules {
 			prioMap[strconv.Itoa(prio)] = policyRulePost{
 				Match: policyRuleMatch{
-					ACL:           rule.ACL,
-					SrcIP:         commaToPipe(rule.SrcIP),
-					DstIP:         commaToPipe(rule.DstIP),
-					EitherIP:      commaToPipe(rule.EitherIP),
-					SrcPort:       commaToPipe(rule.SrcPort),
-					DstPort:       commaToPipe(rule.DstPort),
-					EitherPort:    commaToPipe(rule.EitherPort),
-					Protocol:      rule.Protocol,
-					Application:   rule.Application,
-					AppGroup:      rule.AppGroup,
-					SrcDNS:        rule.SrcDNS,
-					DstDNS:        rule.DstDNS,
-					EitherDNS:     rule.EitherDNS,
-					SrcGeo:        rule.SrcGeo,
-					DstGeo:        rule.DstGeo,
-					EitherGeo:     rule.EitherGeo,
-					SrcService:    rule.SrcService,
-					DstService:    rule.DstService,
-					EitherService: rule.EitherService,
+					ACL:                rule.ACL,
+					SrcIP:              commaToPipe(rule.SrcIP),
+					DstIP:              commaToPipe(rule.DstIP),
+					EitherIP:           commaToPipe(rule.EitherIP),
+					SrcPort:            commaToPipe(rule.SrcPort),
+					DstPort:            commaToPipe(rule.DstPort),
+					EitherPort:         commaToPipe(rule.EitherPort),
+					Protocol:           rule.Protocol,
+					Application:        rule.Application,
+					AppGroup:           rule.AppGroup,
+					SrcDNS:             rule.SrcDNS,
+					DstDNS:             rule.DstDNS,
+					EitherDNS:          rule.EitherDNS,
+					SrcGeo:             rule.SrcGeo,
+					DstGeo:             rule.DstGeo,
+					EitherGeo:          rule.EitherGeo,
+					SrcService:         rule.SrcService,
+					DstService:         rule.DstService,
+					EitherService:      rule.EitherService,
 					DSCP:               rule.DSCP,
 					VLAN:               rule.VLAN,
 					Overlay:            rule.Overlay,

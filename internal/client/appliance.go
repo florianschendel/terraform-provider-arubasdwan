@@ -225,6 +225,46 @@ func (f *flexBool) UnmarshalJSON(b []byte) error {
 	return fmt.Errorf("cannot unmarshal %s into bool", string(b))
 }
 
+// flexInt64 unmarshals a JSON number, numeric string, or null into a Go
+// int64. Used for values that exceed 32 bits — IPv4 addresses encoded as
+// unsigned integers reach 4294967295 — which must not overflow the plain
+// int of flexInt on 32-bit builds.
+type flexInt64 int64
+
+func (f *flexInt64) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*f = 0
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err == nil {
+		if v, err := n.Int64(); err == nil {
+			*f = flexInt64(v)
+			return nil
+		}
+		v, err := n.Float64()
+		if err != nil {
+			return fmt.Errorf("cannot unmarshal %s into int64", string(b))
+		}
+		*f = flexInt64(int64(v))
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		if s == "" {
+			*f = 0
+			return nil
+		}
+		v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+		if err != nil {
+			return fmt.Errorf("cannot unmarshal %q into int64", s)
+		}
+		*f = flexInt64(v)
+		return nil
+	}
+	return fmt.Errorf("cannot unmarshal %s into int64", string(b))
+}
+
 // flexInt unmarshals a JSON number, numeric string, or null into a Go int.
 type flexInt int
 

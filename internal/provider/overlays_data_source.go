@@ -125,7 +125,7 @@ func (d *overlaysDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 										Computed:    true,
 									},
 									"application": schema.StringAttribute{
-										Description: "Name of the application to match — built-in or user-defined, including DNS, compound, and port/protocol classifications.",
+										Description: "Name of the application to match — built-in or user-defined DNS, compound, and port/protocol classifications. Address maps are matched through the service criteria instead.",
 										Computed:    true,
 									},
 									"app_group": schema.StringAttribute{
@@ -177,15 +177,15 @@ func (d *overlaysDataSource) Schema(_ context.Context, _ datasource.SchemaReques
 										Computed:    true,
 									},
 									"src_service": schema.StringAttribute{
-										Description: "Source SaaS service or organization name.",
+										Description: "Source SaaS service, organization, or address map name.",
 										Computed:    true,
 									},
 									"dst_service": schema.StringAttribute{
-										Description: "Destination SaaS service or organization name.",
+										Description: "Destination SaaS service, organization, or address map name.",
 										Computed:    true,
 									},
 									"either_service": schema.StringAttribute{
-										Description: "Match the SaaS service or organization name in either direction.",
+										Description: "Match a SaaS service, an organization, or an address map in either direction. This is the criterion the Orchestrator UI fills when an address map is selected.",
 										Computed:    true,
 									},
 									"src_address_group": schema.StringAttribute{

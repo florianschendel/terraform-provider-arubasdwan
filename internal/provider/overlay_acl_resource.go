@@ -167,7 +167,7 @@ func (r *overlayACLResource) Schema(_ context.Context, _ resource.SchemaRequest,
 							Computed: true,
 						},
 						"application": schema.StringAttribute{
-							Description: "Name of the application to match — built-in or user-defined, including DNS, compound, and port/protocol classifications.",
+							Description: "Name of the application to match — built-in or user-defined DNS, compound, and port/protocol classifications. Address maps are matched through the service criteria instead.",
 							Optional:    true,
 						},
 						"app_group": schema.StringAttribute{
@@ -219,15 +219,15 @@ func (r *overlayACLResource) Schema(_ context.Context, _ resource.SchemaRequest,
 							Optional:    true,
 						},
 						"src_service": schema.StringAttribute{
-							Description: "Source SaaS service or organization name.",
+							Description: "Source SaaS service, organization, or address map name.",
 							Optional:    true,
 						},
 						"dst_service": schema.StringAttribute{
-							Description: "Destination SaaS service or organization name.",
+							Description: "Destination SaaS service, organization, or address map name.",
 							Optional:    true,
 						},
 						"either_service": schema.StringAttribute{
-							Description: "Match the SaaS service or organization name in either direction.",
+							Description: "Match a SaaS service, an organization, or an address map in either direction. This is the criterion the Orchestrator UI fills when an address map is selected.",
 							Optional:    true,
 						},
 						"src_address_group": schema.StringAttribute{
@@ -344,6 +344,20 @@ func describeSequences(sequences []string, summaries map[string]string) []string
 		out = append(out, seq)
 	}
 	return out
+}
+
+// describeOverlayEntries renders an overlay's ACL entries as
+// "sequence (summary)" strings for diagnostics.
+func describeOverlayEntries(overlay *client.Overlay) []string {
+	models := entriesToModel(overlay)
+	sequences := make([]string, 0, len(models))
+	summaries := make(map[string]string, len(models))
+	for _, model := range models {
+		seq := strconv.FormatInt(model.Sequence.ValueInt64(), 10)
+		sequences = append(sequences, seq)
+		summaries[seq] = entrySummary(model)
+	}
+	return describeSequences(sequences, summaries)
 }
 
 func plural(n int, one, many string) string {
@@ -472,21 +486,69 @@ func entriesToModel(overlay *client.Overlay) []overlayACLEntryModel {
 	return entries
 }
 
+// planCreate rejects at plan time what the create would refuse anyway: an
+// overlay that does not exist, or one whose ACL already holds entries. The
+// latter would be replaced wholesale, so the overlay has to be imported
+// first. Running the check here keeps a plan from promising a create the
+// apply cannot deliver. When the listing fails, planning proceeds and the
+// apply-time guard decides.
+func (r *overlayACLResource) planCreate(ctx context.Context, plan overlayACLResourceModel, resp *resource.ModifyPlanResponse) {
+	if plan.OverlayName.IsUnknown() || plan.OverlayName.IsNull() {
+		return
+	}
+
+	overlay, err := r.client.GetOverlayByName(plan.OverlayName.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddWarning(
+			"Could not check the overlay ACL during planning",
+			"Listing overlays failed: "+err.Error()+
+				"\n\nThe check runs again during apply.",
+		)
+		return
+	}
+	if overlay == nil {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("overlay_name"), "Overlay not found",
+			fmt.Sprintf("No overlay named %q exists on the Orchestrator. This resource manages the ACL of an "+
+				"existing overlay; create the overlay first.", plan.OverlayName.ValueString()),
+		)
+		return
+	}
+	if len(overlay.ACLEntries) == 0 {
+		return
+	}
+
+	summary, detail := unmanagedEntriesError(plan.OverlayName.ValueString(), describeOverlayEntries(overlay), false)
+	resp.Diagnostics.AddError(summary, detail)
+}
+
 // ModifyPlan guards against deleting ACL entries that Terraform never
-// created. Entries the resource wrote itself may be removed by dropping
+// created. On create it rejects overlays that already carry an ACL, so the
+// error surfaces during planning rather than halfway through an apply.
+// On update, entries the resource wrote itself may be removed by dropping
 // them from the configuration; entries that appeared on the Orchestrator
 // without Terraform's knowledge abort the run unless allow_entry_removal
 // confirms their removal.
 func (r *overlayACLResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	// Only relevant for updates: creation is guarded separately, and
-	// destruction resets the ACL on purpose.
-	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+	// Destroy resets the ACL on purpose, and without a configured client
+	// there is nothing to ask.
+	if req.Plan.Raw.IsNull() || r.client == nil {
 		return
 	}
 
-	var state, plan overlayACLResourceModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	var plan overlayACLResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if req.State.Raw.IsNull() {
+		r.planCreate(ctx, plan, resp)
+		return
+	}
+
+	var state overlayACLResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -646,11 +708,7 @@ func (r *overlayACLResource) applyEntries(plan *overlayACLResourceModel, diags *
 	}
 
 	if isCreate && len(overlay.ACLEntries) > 0 {
-		sequences := make([]string, 0, len(overlay.ACLEntries))
-		for _, existing := range overlay.ACLEntries {
-			sequences = append(sequences, strconv.Itoa(existing.Sequence))
-		}
-		summary, detail := unmanagedEntriesError(plan.OverlayName.ValueString(), sequences, false)
+		summary, detail := unmanagedEntriesError(plan.OverlayName.ValueString(), describeOverlayEntries(overlay), false)
 		diags.AddError(summary, detail)
 		return false
 	}

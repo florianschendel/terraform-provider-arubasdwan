@@ -280,3 +280,109 @@ func TestOverlayACLForeignEntryAborts(t *testing.T) {
 		},
 	})
 }
+
+// TestOverlayACLCreateOnPopulatedOverlayFailsAtPlan verifies that adopting an
+// overlay that already carries ACL entries is refused during planning, not
+// only once the apply is under way. PlanOnly makes the failure attributable:
+// the run never reaches the apply phase.
+func TestOverlayACLCreateOnPopulatedOverlayFailsAtPlan(t *testing.T) {
+	fake := &fakeOrchestrator{match: json.RawMessage(`{}`)}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	fake.setEntries(t, map[string]map[string]interface{}{
+		"1000": {"permit": true, "app_group": "existing-group"},
+		"2000": {"permit": false, "dst_ip": "192.0.2.1/32", "comment": "added in the UI"},
+	})
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config:      overlayACLConfig(server.URL, entryCatchAll),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`entries that this configuration does not define`),
+			},
+		},
+	})
+}
+
+// TestOverlayACLCreateNamesExistingEntriesAtPlan checks that the plan-time
+// error identifies the entries standing in the way, including their match
+// criteria, so the overlay can be imported or the rules adopted without
+// first querying the Orchestrator by hand.
+func TestOverlayACLCreateNamesExistingEntriesAtPlan(t *testing.T) {
+	fake := &fakeOrchestrator{match: json.RawMessage(`{}`)}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	fake.setEntries(t, map[string]map[string]interface{}{
+		"2000": {"permit": false, "dst_ip": "192.0.2.1/32"},
+	})
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config:      overlayACLConfig(server.URL, entryCatchAll),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`sequence 2000 \(deny dst_ip "192.0.2.1/32"\)`),
+			},
+		},
+	})
+}
+
+// TestOverlayACLCreateOnMissingOverlayFailsAtPlan verifies that a
+// configuration naming an overlay that does not exist fails while planning.
+// The provider cannot create overlays, so the apply could never succeed.
+func TestOverlayACLCreateOnMissingOverlayFailsAtPlan(t *testing.T) {
+	fake := &fakeOrchestrator{match: json.RawMessage(`{}`)}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	config := fmt.Sprintf(`
+provider "arubasdwan" {
+  orchestrator_url = %q
+  api_key          = "test-key"
+}
+
+resource "arubasdwan_overlay_acl" "test" {
+  overlay_name = "DoesNotExist"
+  entries = [
+%s
+  ]
+}
+`, server.URL, entryCatchAll)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config:      config,
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`Overlay not found`),
+			},
+		},
+	})
+}
+
+// TestOverlayACLCreateOnEmptyOverlayPlansClean guards the counter-case: an
+// overlay without ACL entries still plans and applies without complaint.
+func TestOverlayACLCreateOnEmptyOverlayPlansClean(t *testing.T) {
+	fake := &fakeOrchestrator{match: json.RawMessage(`{}`)}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config: overlayACLConfig(server.URL, entryCatchAll+entryDeny1000),
+			},
+			{
+				Config:   overlayACLConfig(server.URL, entryCatchAll+entryDeny1000),
+				PlanOnly: true,
+			},
+		},
+	})
+}

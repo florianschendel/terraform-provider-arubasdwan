@@ -23,6 +23,8 @@ https://developer.arubanetworks.com/edgeconnect/reference/
   - `arubasdwan_app_compound_classification` (resource): Compound match-based applications (IP, port, protocol, DNS, geo, service, DSCP)
   - `arubasdwan_app_compound_classifications` (data source): List all user-defined compound classification applications
   - `arubasdwan_app_port_protocols` (data source): List all user-defined port/protocol applications
+  - `arubasdwan_app_address_map` (resource): Address maps — classify an IPv4 address range as a named application (API: IP intelligence classification)
+  - `arubasdwan_app_address_maps` (data source): List all user-defined address maps
   - `arubasdwan_app_search` (data source): Wildcard search across **all** applications on the Orchestrator (built-in + user-defined)
 - **Application Groups** — group applications for use in policies
   - `arubasdwan_application_group` (resource): Create, read, update, and delete application groups
@@ -1229,7 +1231,7 @@ Match criteria (all optional, combined with AND within one entry): `application`
 
 > Each entry needs at least one match criterion, or `match_all = true`.
 
-> **The resource owns the overlay's complete ACL and refuses to delete entries it never created.** Removing an entry a previous apply created is a deliberate change and proceeds with a warning. An entry that appeared without Terraform — a rule added in the UI, say — aborts plan and apply; adopt it by adding it to `entries`, or set `allow_entry_removal = true` to confirm its removal. Removals are always reported as a warning, because Terraform's plan summary counts resources rather than ACL entries. For an overlay that already has entries, import it first (`terraform import arubasdwan_overlay_acl.<name> <overlay_name>`) and review the plan; creating the resource for a populated overlay is rejected with an error. The ACL's `options` object and entry fields this provider does not model are preserved across updates.
+> **The resource owns the overlay's complete ACL and refuses to delete entries it never created.** Creating it for an overlay that already has an ACL — or for an overlay that does not exist — fails at **plan** time, so nothing is written before the problem surfaces. Removing an entry a previous apply created is a deliberate change and proceeds with a warning. An entry that appeared without Terraform — a rule added in the UI, say — aborts plan and apply; adopt it by adding it to `entries`, or set `allow_entry_removal = true` to confirm its removal. Removals are always reported as a warning, because Terraform's plan summary counts resources rather than ACL entries. For an overlay that already has entries, import it first (`terraform import arubasdwan_overlay_acl.<name> <overlay_name>`) and review the plan; creating the resource for a populated overlay is rejected with an error. The ACL's `options` object and entry fields this provider does not model are preserved across updates.
 
 ### Attributes
 
@@ -1280,6 +1282,96 @@ terraform import arubasdwan_overlay_acl.business Business
 ```
 
 > **Destroying the resource resets the overlay to matching all traffic** (a single `match_all` entry) — the state of a freshly created overlay. The overlay itself is never deleted.
+
+---
+
+## Resource: `arubasdwan_app_address_map`
+
+Manages an address map: an IPv4 address range classified as a named application, so security policies and overlay ACLs can match traffic to that range by name. The Orchestrator API calls these entries IP intelligence classifications; the UI lists them under *Address Map*.
+
+Addresses are written in dotted notation — the provider converts them to the 32-bit integers the API expects. For a single host, set `ip_end` to the same value as `ip_start`.
+
+### Arguments
+
+| Argument       | Type   | Required | Description                                                                 |
+|----------------|--------|----------|-----------------------------------------------------------------------------|
+| `name`         | string | yes      | Application name; letters, digits, hyphen, underscore, period, max 31 chars |
+| `ip_start`     | string | yes      | First IPv4 address of the range (forces replacement)                        |
+| `ip_end`       | string | yes      | Last IPv4 address of the range; same as `ip_start` for a single host (forces replacement) |
+| `description`  | string | no       | Description (no pipe characters or line breaks)                             |
+| `country`      | string | no       | Country name associated with the range                                      |
+| `country_code` | string | no       | Two-letter ISO 3166-1 alpha-2 country code                                  |
+| `org`          | string | no       | Organization associated with the range                                      |
+| `priority`     | int64  | no       | Classification priority; higher wins (default `100`)                        |
+
+### Attributes
+
+| Attribute    | Type   | Description                                                        |
+|--------------|--------|--------------------------------------------------------------------|
+| `id`         | string | The address for a single-address range, otherwise `<ip_start>-<ip_end>` |
+| `service_id` | int64  | Service ID assigned by the Orchestrator                            |
+
+> Overlay ACLs and policies match an address map through their **service** criteria (`either_service`, or `src_service`/`dst_service`) — that is what the Orchestrator UI fills when an address map is selected. Those criteria also match the `org` value, so one rule can select every range of an organization.
+
+> **The address range is the identifier.** The Orchestrator treats the create call as an upsert, so applying a range that already exists would silently overwrite it — creating the resource for an existing range is rejected at plan time. Import it instead. A name already used by another address map is rejected as well, since policies and overlay ACLs reference applications by name.
+
+### Example
+
+```hcl
+resource "arubasdwan_app_address_map" "stream_server" {
+  name         = "stream-server"
+  ip_start     = "10.0.13.72"
+  ip_end       = "10.0.13.72"
+  description  = "Streaming server, on-premises"
+  country_code = "DE"
+  org          = "Example Org"
+}
+
+resource "arubasdwan_overlay_acl" "business" {
+  overlay_name = "Business"
+
+  entries = [
+    {
+      sequence    = 1000
+      either_service = arubasdwan_app_address_map.stream_server.name
+    },
+  ]
+}
+```
+
+### Import
+
+```bash
+terraform import arubasdwan_app_address_map.stream_server 10.0.13.72
+terraform import arubasdwan_app_address_map.partner_range 203.0.113.10-203.0.113.19
+```
+
+---
+
+## Data Source: `arubasdwan_app_address_maps`
+
+Retrieves all user-defined address maps.
+
+### Attributes
+
+| Attribute      | Type | Description                                                |
+|----------------|------|------------------------------------------------------------|
+| `address_maps` | list | Address map objects, sorted by the start address of their range |
+
+Each object contains `name`, `ip_start`, `ip_end`, `description`, `country`, `country_code`, `org`, `priority`, and `service_id`.
+
+### Example
+
+```hcl
+data "arubasdwan_app_address_maps" "all" {}
+
+output "address_maps" {
+  value = {
+    for m in data.arubasdwan_app_address_maps.all.address_maps :
+    m.name => m.ip_start == m.ip_end ? m.ip_start : "${m.ip_start}-${m.ip_end}"
+  }
+}
+```
 
 ---
 

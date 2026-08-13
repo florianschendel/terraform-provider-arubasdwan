@@ -127,9 +127,9 @@ func (c *Client) GetVRFZoneMappings() ([]VRFZoneMapping, error) {
 //   - ToVRF(20, 1) returns 40     (Default VRF → VRF 1)
 //   - ToDefaultVRF(40) returns 20 (VRF 1 → Default VRF)
 type ZoneTranslator struct {
-	mappings  []VRFZoneMapping                   // All zone-to-VRF mappings
-	byID      map[int]VRFZoneMapping             // Lookup by zone ID → mapping
-	byNameVRF map[string]map[int]VRFZoneMapping  // Lookup by zone name → VRF ID → mapping
+	mappings  []VRFZoneMapping                  // All zone-to-VRF mappings
+	byID      map[int]VRFZoneMapping            // Lookup by zone ID → mapping
+	byNameVRF map[string]map[int]VRFZoneMapping // Lookup by zone name → VRF ID → mapping
 }
 
 // NewZoneTranslator fetches zone-to-VRF mappings once and returns a reusable

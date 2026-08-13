@@ -18,6 +18,8 @@ Supported on Orchestrator 9.6.3 and 9.7.0 (the overlay API is identical in both)
 >
 > - **You removed it from the configuration** — an entry a previous apply created. This is a deliberate change: the plan proceeds and emits a warning listing the affected sequence numbers.
 > - **It appeared without Terraform** — for example a rule somebody added in the Orchestrator UI. Plan and apply abort. Add the entry to `entries` to adopt and keep it, or set `allow_entry_removal = true` to confirm its removal.
+>
+> Adopting an overlay that already carries an ACL is refused the same way: creating the resource for such an overlay fails **during planning**, naming the entries that stand in the way, so the run stops before anything is written. Import the overlay first.
 
 !> **Import before adopting an existing overlay.** Entries missing from `entries` are removed on apply. For an overlay that already has entries, **import it first** — otherwise the plan cannot show what would be removed, because the existing entries are not yet in state. Creating the resource for a populated overlay is therefore rejected with an error pointing at the import command:
 >
@@ -30,6 +32,8 @@ Supported on Orchestrator 9.6.3 and 9.7.0 (the overlay API is identical in both)
 ~> An entry may combine several criteria (for example `application` together with `src_ip`); they are evaluated with AND. Use `match_all = true` — and no other criterion — for an explicit catch-all entry.
 
 -> `entries` is a **set**: the order in which you write the entries does not matter, and plans compare entries as a whole. A changed `sequence` therefore shows up as one entry removed and another added — which is what actually happens on the appliance — instead of an in-place edit of a list position.
+
+-> **Referencing an address map** (`arubasdwan_app_address_map`): use `either_service` — that is the criterion the Orchestrator UI fills when an address map is picked. `src_service` and `dst_service` restrict the match to one direction. The `application` criterion is for DNS, compound, and port/protocol classifications; because the service criteria also match an address map's organization, they can select a whole group of ranges at once.
 
 -> Terraform's plan summary counts **resources**, not ACL entries: removing entries from this resource is reported as `1 to change`, and the removals themselves appear only in the detailed diff. The provider therefore emits a warning naming every sequence number that will be deleted. If you had to set `allow_entry_removal`, remove it again after the apply — that produces one more no-op update (`allow_entry_removal = true -> false`) and restores the guard.
 
@@ -153,23 +157,23 @@ Optional:
 Match criteria (all optional, combined with AND within one entry):
 
 - `app_group` (String) Name of the application group to match.
-- `application` (String) Name of the application to match — built-in or user-defined, including DNS, compound, and port/protocol classifications.
+- `application` (String) Name of the application to match — built-in or user-defined DNS, compound, and port/protocol classifications. Address maps are matched through the service criteria instead.
 - `dscp` (String) DSCP marking to match (e.g. "ef").
 - `dst_address_group` (String) Destination address group name.
 - `dst_dns` (String) Destination DNS hostname pattern.
 - `dst_ip` (String) Destination IP address or CIDR; comma-separated for multiple values.
 - `dst_port` (String) Destination port or range; comma-separated for multiple values.
-- `dst_service` (String) Destination SaaS service or organization name.
+- `dst_service` (String) Destination SaaS service, organization, or address map name.
 - `dst_vrf` (String) Destination VRF segment ID.
 - `either_address_group` (String) Match the address group in either direction.
 - `either_dns` (String) Match the DNS hostname pattern in either direction; supports wildcards (e.g. "*.example.com").
 - `either_ip` (String) Match the IP address or CIDR in either direction; comma-separated for multiple values.
 - `either_port` (String) Match the port or range in either direction; comma-separated for multiple values.
-- `either_service` (String) Match the SaaS service or organization name in either direction.
+- `either_service` (String) Match a SaaS service, an organization, or an address map in either direction. This is the criterion the Orchestrator UI fills when an address map is selected.
 - `protocol` (String) IP protocol to match (e.g. "tcp", "udp", "icmp").
 - `src_address_group` (String) Source address group name (see arubasdwan_ip_address_group).
 - `src_dns` (String) Source DNS hostname pattern.
 - `src_ip` (String) Source IP address or CIDR; comma-separated for multiple values.
 - `src_port` (String) Source port or range; comma-separated for multiple values.
-- `src_service` (String) Source SaaS service or organization name.
+- `src_service` (String) Source SaaS service, organization, or address map name.
 - `src_vrf` (String) Source VRF segment ID.
