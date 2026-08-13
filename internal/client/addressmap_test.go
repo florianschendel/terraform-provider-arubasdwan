@@ -115,3 +115,63 @@ func TestFindAddressMapByName(t *testing.T) {
 		t.Error("ignoring a different range must not hide the match")
 	}
 }
+
+// TestFindOverlappingAddressMap covers the range relationships that matter:
+// containment in both directions, partial overlap from either side, exact
+// match, and the adjacent-but-disjoint case that must NOT be flagged.
+func TestFindOverlappingAddressMap(t *testing.T) {
+	maps := []AddressMap{
+		{Name: "block-a", IPStart: "10.0.1.0", IPEnd: "10.0.1.255"},
+		{Name: "single-b", IPStart: "10.0.5.5", IPEnd: "10.0.5.5"},
+	}
+
+	cases := []struct {
+		name       string
+		start, end string
+		wantMatch  string // empty means no overlap expected
+	}{
+		{"identical range", "10.0.1.0", "10.0.1.255", "block-a"},
+		{"contained inside", "10.0.1.10", "10.0.1.20", "block-a"},
+		{"contains the entry", "10.0.0.0", "10.0.2.0", "block-a"},
+		{"overlaps at the start", "10.0.0.128", "10.0.1.10", "block-a"},
+		{"overlaps at the end", "10.0.1.200", "10.0.2.10", "block-a"},
+		{"touches the first address", "10.0.0.0", "10.0.1.0", "block-a"},
+		{"touches the last address", "10.0.1.255", "10.0.3.0", "block-a"},
+		{"single address inside", "10.0.1.99", "10.0.1.99", "block-a"},
+		{"single address entry hit", "10.0.5.0", "10.0.5.10", "single-b"},
+		// Adjacent ranges share no address and must pass.
+		{"ends right before", "10.0.0.0", "10.0.0.255", ""},
+		{"starts right after", "10.0.2.0", "10.0.2.255", ""},
+		{"far away", "192.168.0.0", "192.168.0.255", ""},
+	}
+
+	for _, c := range cases {
+		got := FindOverlappingAddressMap(maps, c.start, c.end)
+		switch {
+		case c.wantMatch == "" && got != nil:
+			t.Errorf("%s (%s-%s): unexpected overlap with %q", c.name, c.start, c.end, got.Name)
+		case c.wantMatch != "" && got == nil:
+			t.Errorf("%s (%s-%s): expected overlap with %q, got none", c.name, c.start, c.end, c.wantMatch)
+		case c.wantMatch != "" && got != nil && got.Name != c.wantMatch:
+			t.Errorf("%s: overlapped %q, want %q", c.name, got.Name, c.wantMatch)
+		}
+	}
+
+	// A resource must not report an overlap with its own entry.
+	if got := FindOverlappingAddressMap(maps, "10.0.1.0", "10.0.1.255", "10.0.1.0-10.0.1.255"); got != nil {
+		t.Errorf("own range should be ignored, got %q", got.Name)
+	}
+	// Ignoring one range must not hide an overlap with another.
+	if got := FindOverlappingAddressMap(maps, "10.0.1.0", "10.0.5.5", "10.0.1.0-10.0.1.255"); got == nil || got.Name != "single-b" {
+		t.Errorf("expected overlap with single-b, got %+v", got)
+	}
+
+	// Ranges above 2^31 must compare correctly, not wrap.
+	high := []AddressMap{{Name: "high", IPStart: "200.0.0.0", IPEnd: "200.0.0.255"}}
+	if got := FindOverlappingAddressMap(high, "200.0.0.128", "200.0.1.0"); got == nil {
+		t.Error("overlap above 2^31 not detected")
+	}
+	if got := FindOverlappingAddressMap(high, "199.255.255.0", "199.255.255.255"); got != nil {
+		t.Errorf("unexpected overlap below the range: %q", got.Name)
+	}
+}

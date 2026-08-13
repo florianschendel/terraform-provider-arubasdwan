@@ -12,6 +12,12 @@ Manages an address map in the Aruba SD-WAN Orchestrator: an IPv4 address range c
 
 Supported on Orchestrator 9.6.3 and 9.7.0.
 
+!> **Ranges must not overlap.** The Orchestrator classifies an address by the entry covering it, so two entries spanning the same address leave it ambiguous which application name traffic resolves to. A range overlapping an existing entry is rejected while planning, naming the entry in the way. Ranges that merely touch — one ending where the next begins — are fine.
+>
+> Two overlapping entries declared in the *same* configuration are caught during apply rather than planning: a provider cannot inspect sibling resources while a plan is built, so the overlap only becomes visible once the first entry exists.
+>
+> This matters beyond ambiguity: the Orchestrator consolidates overlapping address maps into a single wider entry in a background pass that runs every few minutes, and the API offers no way to disable it. A range that overlaps another one therefore disappears some time after it was written — not at the moment of the write. Keeping ranges disjoint avoids the situation entirely.
+
 !> **The address range is the identifier.** The Orchestrator treats the create call as an upsert, so applying a range that already exists would silently overwrite that definition. Creating the resource for an existing range is therefore rejected at plan time — import the entry instead. A name already used by another address map is rejected as well, because policies and overlay ACLs reference applications by name and duplicates would be ambiguous.
 
 -> Policies and overlay ACLs match an address map through their **service** criteria (`either_service`, or `src_service`/`dst_service` for one direction) — that is what the Orchestrator UI fills when an address map is selected. Since those criteria also match an organization, setting `org` on several entries lets one rule select all of them at once.

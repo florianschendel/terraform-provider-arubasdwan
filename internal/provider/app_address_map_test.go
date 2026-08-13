@@ -273,3 +273,94 @@ func TestAddressMapImportInvalidID(t *testing.T) {
 		},
 	})
 }
+
+// TestAddressMapOverlapWithExistingRejected verifies that a range partially
+// overlapping an entry on the Orchestrator is refused while planning. Unlike
+// an exact match this cannot be resolved by importing, so the diagnostic
+// differs.
+func TestAddressMapOverlapWithExistingRejected(t *testing.T) {
+	fake := &fakeAddressMapServer{entries: map[string]map[string]interface{}{}}
+	fake.seed(167772416, 167772671, "existing-block") // 10.0.1.0 - 10.0.1.255
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		Steps: []resource.TestStep{
+			{
+				// Reaches into the existing block from below.
+				Config:      addressMapConfig(server.URL, "new-range", "10.0.0.128", "10.0.1.10"),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`Address map overlaps another entry`),
+			},
+			{
+				// A single address inside the existing block.
+				Config:      addressMapConfig(server.URL, "new-host", "10.0.1.99", "10.0.1.99"),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`overlaps the address map "existing-block"`),
+			},
+		},
+	})
+}
+
+// TestAddressMapAdjacentRangesAllowed guards the counter-case: ranges that
+// merely touch without sharing an address are legitimate and must apply.
+func TestAddressMapAdjacentRangesAllowed(t *testing.T) {
+	fake := &fakeAddressMapServer{entries: map[string]map[string]interface{}{}}
+	fake.seed(167772416, 167772671, "existing-block") // 10.0.1.0 - 10.0.1.255
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		Steps: []resource.TestStep{
+			{
+				// Ends one address before the existing block starts.
+				Config: addressMapConfig(server.URL, "below-block", "10.0.0.0", "10.0.0.255"),
+				Check: resource.TestCheckResourceAttr(
+					"arubasdwan_app_address_map.test", "id", "10.0.0.0-10.0.0.255"),
+			},
+		},
+	})
+}
+
+// TestAddressMapOverlapWithinConfiguration covers two overlapping entries
+// declared in the same configuration. A provider cannot see sibling
+// resources while planning, so the first one applies and the second fails
+// against the state the Orchestrator has by then — the overlap is caught,
+// just during apply rather than plan.
+func TestAddressMapOverlapWithinConfiguration(t *testing.T) {
+	fake := &fakeAddressMapServer{entries: map[string]map[string]interface{}{}}
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	config := fmt.Sprintf(`
+provider "arubasdwan" {
+  orchestrator_url = %q
+  api_key          = "test-key"
+}
+
+resource "arubasdwan_app_address_map" "first" {
+  name     = "block-one"
+  ip_start = "10.0.1.0"
+  ip_end   = "10.0.1.255"
+}
+
+resource "arubasdwan_app_address_map" "second" {
+  name       = "block-two"
+  ip_start   = "10.0.1.128"
+  ip_end     = "10.0.2.0"
+  depends_on = [arubasdwan_app_address_map.first]
+}
+`, server.URL)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config:      config,
+				ExpectError: regexp.MustCompile(`Address map overlaps another entry`),
+			},
+		},
+	})
+}

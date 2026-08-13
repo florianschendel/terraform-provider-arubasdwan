@@ -226,6 +226,50 @@ func FindAddressMapByName(maps []AddressMap, name string, ignoreRanges ...string
 	return nil
 }
 
+// FindOverlappingAddressMap returns the first entry whose range overlaps
+// [ipStart, ipEnd], or nil when none does. Ranges given in ignoreRanges —
+// keyed as by AddressMapRangeKey — are skipped, which lets a resource
+// exclude its own entry.
+//
+// The Orchestrator classifies an address by the entry covering it, so two
+// entries spanning the same address make the classification ambiguous: which
+// application name a packet resolves to then depends on the Orchestrator's
+// internal ordering rather than on the configuration.
+func FindOverlappingAddressMap(maps []AddressMap, ipStart, ipEnd string, ignoreRanges ...string) *AddressMap {
+	start, err := ParseIPv4(ipStart)
+	if err != nil {
+		return nil
+	}
+	end, err := ParseIPv4(ipEnd)
+	if err != nil {
+		return nil
+	}
+
+	ignored := make(map[string]bool, len(ignoreRanges))
+	for _, r := range ignoreRanges {
+		ignored[r] = true
+	}
+
+	for i := range maps {
+		if ignored[AddressMapRangeKey(maps[i].IPStart, maps[i].IPEnd)] {
+			continue
+		}
+		otherStart, err := ParseIPv4(maps[i].IPStart)
+		if err != nil {
+			continue
+		}
+		otherEnd, err := ParseIPv4(maps[i].IPEnd)
+		if err != nil {
+			continue
+		}
+		// Two inclusive ranges overlap unless one ends before the other starts.
+		if start <= otherEnd && otherStart <= end {
+			return &maps[i]
+		}
+	}
+	return nil
+}
+
 // AddressMapRangeKey renders a range as the identifier this provider uses:
 // a single address when start and end match, otherwise "start-end".
 func AddressMapRangeKey(ipStart, ipEnd string) string {

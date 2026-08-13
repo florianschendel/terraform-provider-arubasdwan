@@ -153,6 +153,19 @@ func addressMapRangeExistsError(existing *client.AddressMap) (string, string) {
 	)
 }
 
+// addressMapOverlapError builds the diagnostic for a range that overlaps a
+// different entry without matching it exactly.
+func addressMapOverlapError(planStart, planEnd string, other *client.AddressMap) (string, string) {
+	return "Address map overlaps another entry", fmt.Sprintf(
+		"The range %s overlaps the address map %q (%s). The Orchestrator classifies an address by the "+
+			"entry covering it, so overlapping ranges leave it ambiguous which application name traffic "+
+			"resolves to.\n\n"+
+			"Adjust this range so it does not overlap, or remove the other entry.",
+		client.AddressMapRangeKey(planStart, planEnd), other.Name,
+		client.AddressMapRangeKey(other.IPStart, other.IPEnd),
+	)
+}
+
 // addressMapDuplicateNameError builds the diagnostic for a name collision
 // with an entry covering a different range.
 func addressMapDuplicateNameError(dup *client.AddressMap, renaming bool) (string, string) {
@@ -259,6 +272,14 @@ func (r *appAddressMapResource) ModifyPlan(ctx context.Context, req resource.Mod
 			}
 		}
 	}
+	// A partial overlap cannot be resolved by importing, so it is reported
+	// separately from an exact match. The resource's own range is excluded.
+	if other := client.FindOverlappingAddressMap(existing,
+		plan.IPStart.ValueString(), plan.IPEnd.ValueString(), ignoreRanges...); other != nil {
+		summary, detail := addressMapOverlapError(plan.IPStart.ValueString(), plan.IPEnd.ValueString(), other)
+		resp.Diagnostics.AddAttributeError(path.Root("ip_start"), summary, detail)
+		return
+	}
 	if dup := client.FindAddressMapByName(existing, plan.Name.ValueString(), ignoreRanges...); dup != nil {
 		summary, detail := addressMapDuplicateNameError(dup, renaming)
 		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
@@ -295,6 +316,12 @@ func (r *appAddressMapResource) Create(ctx context.Context, req resource.CreateR
 			resp.Diagnostics.AddError(summary, detail)
 			return
 		}
+	}
+	if other := client.FindOverlappingAddressMap(existing,
+		plan.IPStart.ValueString(), plan.IPEnd.ValueString(), rangeKey); other != nil {
+		summary, detail := addressMapOverlapError(plan.IPStart.ValueString(), plan.IPEnd.ValueString(), other)
+		resp.Diagnostics.AddError(summary, detail)
+		return
 	}
 	if dup := client.FindAddressMapByName(existing, plan.Name.ValueString(), rangeKey); dup != nil {
 		summary, detail := addressMapDuplicateNameError(dup, false)
@@ -369,6 +396,12 @@ func (r *appAddressMapResource) Update(ctx context.Context, req resource.UpdateR
 	existing, err := r.client.GetAddressMaps()
 	if err != nil {
 		resp.Diagnostics.AddError("Error checking existing address maps", "Could not list address maps: "+err.Error())
+		return
+	}
+	if other := client.FindOverlappingAddressMap(existing,
+		plan.IPStart.ValueString(), plan.IPEnd.ValueString(), rangeKey); other != nil {
+		summary, detail := addressMapOverlapError(plan.IPStart.ValueString(), plan.IPEnd.ValueString(), other)
+		resp.Diagnostics.AddError(summary, detail)
 		return
 	}
 	if dup := client.FindAddressMapByName(existing, plan.Name.ValueString(), rangeKey); dup != nil {

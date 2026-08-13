@@ -1313,6 +1313,8 @@ Addresses are written in dotted notation — the provider converts them to the 3
 
 > Overlay ACLs and policies match an address map through their **service** criteria (`either_service`, or `src_service`/`dst_service`) — that is what the Orchestrator UI fills when an address map is selected. Those criteria also match the `org` value, so one rule can select every range of an organization.
 
+> **Ranges must not overlap.** A range overlapping an existing entry is rejected at plan time, since the Orchestrator classifies an address by the entry covering it and overlaps make that ambiguous. Adjacent ranges are fine. Two overlapping entries in the *same* configuration surface during apply — a provider cannot inspect sibling resources while planning.
+
 > **The address range is the identifier.** The Orchestrator treats the create call as an upsert, so applying a range that already exists would silently overwrite it — creating the resource for an existing range is rejected at plan time. Import it instead. A name already used by another address map is rejected as well, since policies and overlay ACLs reference applications by name.
 
 ### Example
