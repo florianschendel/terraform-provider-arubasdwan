@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/florianschendel/terraform-provider-arubasdwan/internal/client"
@@ -12,9 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -28,6 +25,7 @@ var (
 // appCompoundClassificationResourceModel maps the resource schema data.
 type appCompoundClassificationResourceModel struct {
 	ID            types.String `tfsdk:"id"`
+	RuleID        types.Int64  `tfsdk:"rule_id"`
 	Name          types.String `tfsdk:"name"`
 	Description   types.String `tfsdk:"description"`
 	Confidence    types.Int64  `tfsdk:"confidence"`
@@ -84,11 +82,15 @@ func (r *appCompoundClassificationResource) Schema(_ context.Context, _ resource
 			"Uses the /gms/rest/applicationDefinition/compoundClassification API endpoints.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Description: "The numeric ID assigned by the Orchestrator (as a string).",
+				Description: "The name of the application, which identifies the definition.",
 				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
+			},
+			"rule_id": schema.Int64Attribute{
+				Description: "The numeric ID the Orchestrator currently assigns to this rule. It doubles " +
+					"as the rule's position in the classification priority order, so deleting another " +
+					"compound classification shifts it. Do not use it as a reference — it is reported " +
+					"for diagnostics only and can change without this definition being touched.",
+				Computed: true,
 			},
 			"name": schema.StringAttribute{
 				Description: "The name of the application.",
@@ -181,7 +183,8 @@ func compoundModelFromPlan(plan appCompoundClassificationResourceModel) client.C
 
 func compoundStateFromDef(def *client.CompoundClassification) appCompoundClassificationResourceModel {
 	return appCompoundClassificationResourceModel{
-		ID:            types.StringValue(strconv.Itoa(def.ID)),
+		ID:            types.StringValue(def.Name),
+		RuleID:        types.Int64Value(int64(def.ID)),
 		Name:          types.StringValue(def.Name),
 		Description:   types.StringValue(def.Description),
 		Confidence:    types.Int64Value(int64(def.Confidence)),
@@ -208,11 +211,19 @@ func compoundStateFromDef(def *client.CompoundClassification) appCompoundClassif
 }
 
 // findCompoundByName returns the first classification whose name matches
-// (compared case-insensitively), ignoring the entry with ignoreID; nil when
-// there is none. Pass a negative ignoreID to consider every entry.
-func findCompoundByName(defs []client.CompoundClassification, name string, ignoreID int) *client.CompoundClassification {
+// (compared case-insensitively), skipping entries named ignoreName; nil when
+// there is none. Pass an empty ignoreName to consider every entry.
+//
+// The entry to skip is identified by name rather than by ID because IDs shift
+// whenever another classification is deleted. A resource updating itself
+// passes the name it holds in state, so its own entry does not count as a
+// collision with itself.
+func findCompoundByName(defs []client.CompoundClassification, name, ignoreName string) *client.CompoundClassification {
 	for i := range defs {
-		if defs[i].ID != ignoreID && strings.EqualFold(defs[i].Name, name) {
+		if ignoreName != "" && strings.EqualFold(defs[i].Name, ignoreName) {
+			continue
+		}
+		if strings.EqualFold(defs[i].Name, name) {
 			return &defs[i]
 		}
 	}
@@ -226,20 +237,32 @@ func compoundDuplicateError(dup *client.CompoundClassification, renaming bool) (
 	if renaming {
 		return summary, fmt.Sprintf(
 			"Another user-defined compound classification named %q already exists on the "+
-				"Orchestrator (ID %d). Renaming this one to the same name would create a duplicate. "+
+				"Orchestrator. Renaming this one to the same name would create a duplicate. "+
 				"Choose a different name.",
-			dup.Name, dup.ID,
+			dup.Name,
 		)
 	}
 	return summary, fmt.Sprintf(
-		"A user-defined compound classification named %q already exists on the Orchestrator "+
-			"(ID %d). The Orchestrator does not enforce unique names, so applying would create a "+
+		"A user-defined compound classification named %q already exists on the Orchestrator. "+
+			"The Orchestrator does not enforce unique names, so applying would create a "+
 			"duplicate definition — and overlay ACLs and policies reference applications by name, "+
 			"which makes duplicates ambiguous.\n\n"+
 			"If Terraform should manage the existing definition, import it:\n\n"+
-			"  terraform import arubasdwan_app_compound_classification.<name> %d\n\n"+
+			"  terraform import arubasdwan_app_compound_classification.<name> %s\n\n"+
 			"To define a separate application, choose a different name.",
-		dup.Name, dup.ID, dup.ID,
+		dup.Name, dup.Name,
+	)
+}
+
+// compoundVanishedError builds the diagnostic for an entry that is no longer
+// on the Orchestrator when an update is applied.
+func compoundVanishedError(name string) (string, string) {
+	return "Compound classification no longer exists", fmt.Sprintf(
+		"No user-defined compound classification named %q exists on the Orchestrator, so there is "+
+			"nothing to update. It was most likely deleted outside Terraform between the plan and "+
+			"this apply.\n\nRun terraform plan again: the refresh notices the entry is gone and "+
+			"plans to recreate it.",
+		name,
 	)
 }
 
@@ -258,7 +281,7 @@ func (r *appCompoundClassificationResource) ModifyPlan(ctx context.Context, req 
 	}
 
 	renaming := false
-	ignoreID := -1
+	ignoreName := ""
 	if !req.State.Raw.IsNull() {
 		var state appCompoundClassificationResourceModel
 		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
@@ -269,9 +292,7 @@ func (r *appCompoundClassificationResource) ModifyPlan(ctx context.Context, req 
 			return
 		}
 		renaming = true
-		if id, err := strconv.Atoi(state.ID.ValueString()); err == nil {
-			ignoreID = id
-		}
+		ignoreName = state.Name.ValueString()
 	}
 
 	existing, err := r.client.GetCompoundClassifications()
@@ -283,7 +304,7 @@ func (r *appCompoundClassificationResource) ModifyPlan(ctx context.Context, req 
 		)
 		return
 	}
-	if dup := findCompoundByName(existing, plan.Name.ValueString(), ignoreID); dup != nil {
+	if dup := findCompoundByName(existing, plan.Name.ValueString(), ignoreName); dup != nil {
 		summary, detail := compoundDuplicateError(dup, renaming)
 		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
 	}
@@ -311,7 +332,7 @@ func (r *appCompoundClassificationResource) Create(ctx context.Context, req reso
 		)
 		return
 	}
-	if dup := findCompoundByName(existing, plan.Name.ValueString(), -1); dup != nil {
+	if dup := findCompoundByName(existing, plan.Name.ValueString(), ""); dup != nil {
 		summary, detail := compoundDuplicateError(dup, false)
 		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
 		return
@@ -328,7 +349,26 @@ func (r *appCompoundClassificationResource) Create(ctx context.Context, req reso
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(def.ID))
+	// Read the entry back to record the ID the Orchestrator actually assigned
+	// rather than the one requested.
+	created, err := r.client.GetCompoundClassificationByName(def.Name)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Compound classification created but could not be read back",
+			"Could not list compound classifications: "+err.Error(),
+		)
+		return
+	}
+	if created == nil {
+		resp.Diagnostics.AddError(
+			"Compound classification created but not found",
+			fmt.Sprintf("The Orchestrator does not report a compound classification named %q after creating it.", def.Name),
+		)
+		return
+	}
+
+	plan.ID = types.StringValue(created.Name)
+	plan.RuleID = types.Int64Value(int64(created.ID))
 
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -343,20 +383,14 @@ func (r *appCompoundClassificationResource) Read(ctx context.Context, req resour
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error parsing compound classification ID",
-			fmt.Sprintf("Invalid ID %q: %s", state.ID.ValueString(), err.Error()),
-		)
-		return
-	}
-
-	def, err := r.client.GetCompoundClassification(id)
+	// Look the entry up by name, not by the numeric ID held in state: IDs are
+	// positions in the priority order and shift when another classification is
+	// deleted, so a stored ID can address a different rule entirely.
+	def, err := r.client.GetCompoundClassificationByName(state.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error reading compound classification",
-			"Could not read compound classification "+state.ID.ValueString()+": "+err.Error(),
+			"Could not read compound classification "+state.Name.ValueString()+": "+err.Error(),
 		)
 		return
 	}
@@ -381,16 +415,12 @@ func (r *appCompoundClassificationResource) Update(ctx context.Context, req reso
 		return
 	}
 
-	id, err := strconv.Atoi(plan.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error parsing compound classification ID",
-			fmt.Sprintf("Invalid ID %q: %s", plan.ID.ValueString(), err.Error()),
-		)
+	var state appCompoundClassificationResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Renaming must not collide with another definition either.
 	existing, err := r.client.GetCompoundClassifications()
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -399,14 +429,25 @@ func (r *appCompoundClassificationResource) Update(ctx context.Context, req reso
 		)
 		return
 	}
-	if dup := findCompoundByName(existing, plan.Name.ValueString(), id); dup != nil {
+
+	// Renaming must not collide with another definition either.
+	if dup := findCompoundByName(existing, plan.Name.ValueString(), state.Name.ValueString()); dup != nil {
 		summary, detail := compoundDuplicateError(dup, true)
 		resp.Diagnostics.AddAttributeError(path.Root("name"), summary, detail)
 		return
 	}
 
+	// Resolve the current ID from the name in state. Writing to the ID stored
+	// earlier would overwrite whichever rule has since moved into that slot.
+	current := findCompoundByName(existing, state.Name.ValueString(), "")
+	if current == nil {
+		summary, detail := compoundVanishedError(state.Name.ValueString())
+		resp.Diagnostics.AddError(summary, detail)
+		return
+	}
+
 	def := compoundModelFromPlan(plan)
-	def.ID = id
+	def.ID = current.ID
 
 	err = r.client.UpdateCompoundClassification(def)
 	if err != nil {
@@ -416,6 +457,9 @@ func (r *appCompoundClassificationResource) Update(ctx context.Context, req reso
 		)
 		return
 	}
+
+	plan.ID = types.StringValue(plan.Name.ValueString())
+	plan.RuleID = types.Int64Value(int64(current.ID))
 
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -430,16 +474,22 @@ func (r *appCompoundClassificationResource) Delete(ctx context.Context, req reso
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
+	// Resolve the current ID from the name. Deleting by an ID stored earlier
+	// would remove whichever rule has since moved into that slot.
+	current, err := r.client.GetCompoundClassificationByName(state.Name.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
-			"Error parsing compound classification ID",
-			fmt.Sprintf("Invalid ID %q: %s", state.ID.ValueString(), err.Error()),
+			"Error deleting compound classification",
+			"Could not list compound classifications: "+err.Error(),
 		)
 		return
 	}
+	if current == nil {
+		// Already gone — nothing to delete.
+		return
+	}
 
-	err = r.client.DeleteCompoundClassification(id)
+	err = r.client.DeleteCompoundClassification(current.ID)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting compound classification",
@@ -449,16 +499,20 @@ func (r *appCompoundClassificationResource) Delete(ctx context.Context, req reso
 	}
 }
 
-// ImportState imports a resource by its numeric ID (as a string).
+// ImportState imports a resource by its application name. The numeric rule ID
+// is deliberately not accepted: it encodes the rule's position in the priority
+// order and changes whenever another classification is deleted, so an import
+// by ID would bind the resource to whatever occupies that slot at the time.
 func (r *appCompoundClassificationResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	_, err := strconv.Atoi(req.ID)
-	if err != nil {
+	name := strings.TrimSpace(req.ID)
+	if name == "" {
 		resp.Diagnostics.AddError(
 			"Error importing compound classification",
-			fmt.Sprintf("Invalid import ID %q. Expected a numeric ID.", req.ID),
+			"Expected the application name as the import ID, got an empty string.",
 		)
 		return
 	}
 
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), name)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
 }

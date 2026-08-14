@@ -10,7 +10,19 @@ description: |-
 
 Manages a compound match-based application definition in the Aruba SD-WAN Orchestrator. Uses the /gms/rest/applicationDefinition/compoundClassification API endpoints.
 
+!> **The name identifies the definition, not the numeric ID.** The Orchestrator's compound rule ID doubles as the rule's position in the classification priority order: deleting a rule renumbers the remaining ones, so every ID above the deleted entry shifts down. An ID recorded earlier then addresses a *different* rule. The provider therefore resolves the current ID from the name on every read, update and delete, and `id` is the application name. The numeric value is still reported as `rule_id` for diagnostics — do not use it as a reference, it changes without this definition being touched.
+
 !> **Duplicate names are rejected.** The Orchestrator does not enforce unique application names, and overlay ACLs and policies reference applications by name — duplicates make those references ambiguous. Creating (or renaming to) a name that a user-defined compound classification already uses therefore aborts — already at plan time — with a pointer to `terraform import`.
+
+## Import
+
+Compound classifications are imported by their application name:
+
+```bash
+terraform import arubasdwan_app_compound_classification.example InternalAPITraffic
+```
+
+Importing by the numeric rule ID is deliberately not supported — it would bind the resource to whichever rule occupies that position at the time.
 
 ## Example Usage
 
@@ -57,4 +69,5 @@ resource "arubasdwan_app_compound_classification" "example" {
 
 ### Read-Only
 
-- `id` (String) The numeric ID assigned by the Orchestrator (as a string).
+- `id` (String) The name of the application, which identifies the definition.
+- `rule_id` (Number) The numeric ID the Orchestrator currently assigns to this rule. It doubles as the rule's position in the classification priority order, so deleting another compound classification shifts it. Do not use it as a reference — it is reported for diagnostics only and can change without this definition being touched.

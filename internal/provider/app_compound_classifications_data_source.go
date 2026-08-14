@@ -69,7 +69,9 @@ func (d *appCompoundClassificationsDataSource) Schema(_ context.Context, _ datas
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"id": schema.StringAttribute{
-							Description: "The numeric ID assigned by the Orchestrator (as a string).",
+							Description: "The numeric ID the Orchestrator currently assigns (as a string). It doubles " +
+								"as the rule's position in the classification priority order and is reassigned when a " +
+								"compound classification is deleted, so it is not a stable reference — match on name instead.",
 							Computed:    true,
 						},
 						"name": schema.StringAttribute{

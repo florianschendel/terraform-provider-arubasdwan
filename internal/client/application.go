@@ -882,6 +882,31 @@ func (c *Client) GetCompoundClassification(id int) (*CompoundClassification, err
 	return nil, nil
 }
 
+// GetCompoundClassificationByName retrieves a single compound classification
+// by its name, compared case-insensitively as the Orchestrator matches
+// application names. Returns (nil, nil) when no classification carries the
+// name.
+//
+// Prefer this over GetCompoundClassification for anything that outlives a
+// single request: the numeric ID doubles as the rule's position in the
+// priority order, so deleting an entry shifts every higher ID down by one and
+// an ID held from an earlier call then addresses a different rule. The name is
+// the only stable handle the API offers.
+func (c *Client) GetCompoundClassificationByName(name string) (*CompoundClassification, error) {
+	defs, err := c.GetCompoundClassifications()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range defs {
+		if strings.EqualFold(defs[i].Name, name) {
+			return &defs[i], nil
+		}
+	}
+
+	return nil, nil
+}
+
 // CreateCompoundClassification creates a new compound classification.
 // It automatically assigns the next available ID by finding the maximum
 // existing ID and incrementing it.

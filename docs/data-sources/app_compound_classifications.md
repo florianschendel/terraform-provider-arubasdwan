@@ -42,7 +42,7 @@ Read-Only:
 - `either_ip` (String) Either direction IP match.
 - `either_port` (String) Either direction port match.
 - `either_service` (String) Either direction service match.
-- `id` (String) The numeric ID assigned by the Orchestrator (as a string).
+- `id` (String) The numeric ID the Orchestrator currently assigns (as a string). It doubles as the rule's position in the classification priority order and is reassigned when a compound classification is deleted, so it is not a stable reference — match on name instead.
 - `name` (String) The name of the application.
 - `protocol` (String) Protocol match (e.g. "tcp", "udp").
 - `src_dns` (String) Source DNS match.
