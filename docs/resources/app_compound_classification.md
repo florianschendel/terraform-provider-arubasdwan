@@ -11,6 +11,8 @@ description: |-
 Manages a compound match-based application definition in the Aruba SD-WAN Orchestrator. Uses the /gms/rest/applicationDefinition/compoundClassification API endpoints.
 
 !> **The name identifies the definition, not the numeric ID.** The Orchestrator's compound rule ID doubles as the rule's position in the classification priority order: deleting a rule renumbers the remaining ones, so every ID above the deleted entry shifts down. An ID recorded earlier then addresses a *different* rule. The provider therefore resolves the current ID from the name on every read, update and delete, and `id` is the application name. The numeric value is still reported as `rule_id` for diagnostics — do not use it as a reference, it changes without this definition being touched.
+>
+> Because every delete renumbers the list, resolving the ID and writing are performed as one serialized step. Terraform runs the operations of one apply in parallel — destroying several compound classifications at once would otherwise let all deletes resolve their IDs before the first delete shifts them, sending the later ones into wrong slots. Changes made outside Terraform *while* an apply is running can still shift IDs mid-operation; avoid editing compound classifications in the Orchestrator during an apply.
 
 !> **Duplicate names are rejected.** The Orchestrator does not enforce unique application names, and overlay ACLs and policies reference applications by name — duplicates make those references ambiguous. Creating (or renaming to) a name that a user-defined compound classification already uses therefore aborts — already at plan time — with a pointer to `terraform import`.
 

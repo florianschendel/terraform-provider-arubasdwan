@@ -437,19 +437,13 @@ func (r *appCompoundClassificationResource) Update(ctx context.Context, req reso
 		return
 	}
 
-	// Resolve the current ID from the name in state. Writing to the ID stored
-	// earlier would overwrite whichever rule has since moved into that slot.
-	current := findCompoundByName(existing, state.Name.ValueString(), "")
-	if current == nil {
-		summary, detail := compoundVanishedError(state.Name.ValueString())
-		resp.Diagnostics.AddError(summary, detail)
-		return
-	}
-
+	// The current ID is resolved from the name in state and written in one
+	// serialized step inside the client: several resources of one apply run
+	// their writes in parallel, and every delete renumbers the IDs the other
+	// operations are about to address. An ID resolved here, outside that
+	// step, could already belong to a different rule when the write lands.
 	def := compoundModelFromPlan(plan)
-	def.ID = current.ID
-
-	err = r.client.UpdateCompoundClassification(def)
+	ruleID, found, err := r.client.UpdateCompoundClassificationByName(state.Name.ValueString(), def)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating compound classification",
@@ -457,9 +451,14 @@ func (r *appCompoundClassificationResource) Update(ctx context.Context, req reso
 		)
 		return
 	}
+	if !found {
+		summary, detail := compoundVanishedError(state.Name.ValueString())
+		resp.Diagnostics.AddError(summary, detail)
+		return
+	}
 
 	plan.ID = types.StringValue(plan.Name.ValueString())
-	plan.RuleID = types.Int64Value(int64(current.ID))
+	plan.RuleID = types.Int64Value(int64(ruleID))
 
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -474,23 +473,14 @@ func (r *appCompoundClassificationResource) Delete(ctx context.Context, req reso
 		return
 	}
 
-	// Resolve the current ID from the name. Deleting by an ID stored earlier
-	// would remove whichever rule has since moved into that slot.
-	current, err := r.client.GetCompoundClassificationByName(state.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error deleting compound classification",
-			"Could not list compound classifications: "+err.Error(),
-		)
-		return
-	}
-	if current == nil {
-		// Already gone — nothing to delete.
-		return
-	}
-
-	err = r.client.DeleteCompoundClassification(current.ID)
-	if err != nil {
+	// The current ID is resolved from the name and deleted in one serialized
+	// step inside the client. Destroying several compound classifications in
+	// one apply issues the deletes in parallel, and each delete renumbers the
+	// IDs the remaining ones are about to address — resolving here, outside
+	// that step, would let all deletes resolve before the first one shifts
+	// the list, sending the later ones into wrong slots. found=false means
+	// the entry is already gone, which is the desired end state.
+	if _, err := r.client.DeleteCompoundClassificationByName(state.Name.ValueString()); err != nil {
 		resp.Diagnostics.AddError(
 			"Error deleting compound classification",
 			"Could not delete compound classification, unexpected error: "+err.Error(),

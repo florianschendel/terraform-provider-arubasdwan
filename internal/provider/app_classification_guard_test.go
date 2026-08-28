@@ -49,7 +49,7 @@ func (f *fakeAppDefServer) handler() http.Handler {
 			f.defs[id] = body
 			_, _ = w.Write([]byte("{}"))
 		case http.MethodDelete:
-			delete(f.defs, id)
+			f.removeAndRenumberLocked(id)
 			_, _ = w.Write([]byte("{}"))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -214,13 +214,15 @@ func (f *fakeAppDefServer) seedCompound(id int, name, description string) {
 	}
 }
 
-// deleteAndCompact removes the entry with the given name and renumbers the
-// remaining ones from 1, the way the Orchestrator reassigns IDs on deletion:
-// the ID doubles as the rule's position in the priority order, so entries
-// above the deleted one shift down.
-func (f *fakeAppDefServer) deleteAndCompact(name string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+// removeAndRenumberLocked deletes the entry stored under idKey and renumbers
+// the remaining ones from 1, the way the Orchestrator reassigns IDs on
+// deletion: the ID doubles as the rule's position in the priority order, so
+// entries above the deleted one shift down. Callers must hold f.mu.
+func (f *fakeAppDefServer) removeAndRenumberLocked(idKey string) {
+	if _, ok := f.defs[idKey]; !ok {
+		return
+	}
+	delete(f.defs, idKey)
 
 	ids := make([]int, 0, len(f.defs))
 	for k := range f.defs {
@@ -233,14 +235,24 @@ func (f *fakeAppDefServer) deleteAndCompact(name string) {
 	next := 1
 	for _, old := range ids {
 		entry := f.defs[strconv.Itoa(old)]
-		if entry["name"] == name {
-			continue
-		}
 		entry["id"] = json.Number(strconv.Itoa(next))
 		compacted[strconv.Itoa(next)] = entry
 		next++
 	}
 	f.defs = compacted
+}
+
+// deleteAndCompact removes the entry with the given name the way an operator
+// deleting it in the Orchestrator UI would, renumbering included.
+func (f *fakeAppDefServer) deleteAndCompact(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for k, e := range f.defs {
+		if e["name"] == name {
+			f.removeAndRenumberLocked(k)
+			return
+		}
+	}
 }
 
 // lookupCompound returns the entry carrying the given name, or nil.
@@ -393,6 +405,66 @@ func TestCompoundImportByName(t *testing.T) {
 					}
 					return nil
 				},
+			},
+		},
+	})
+}
+
+// TestCompoundParallelDestroy is the regression test for destroying several
+// compound classifications in one apply. Terraform issues the deletes in
+// parallel, and every delete renumbers the IDs the remaining ones address.
+// If an operation resolved its ID before another delete shifted the list, it
+// would hit a wrong slot — deleting an unrelated rule. The bystander seeded
+// below ends up in exactly such a slot and must survive the destroy.
+func TestCompoundParallelDestroy(t *testing.T) {
+	fake := &fakeAppDefServer{defs: map[string]map[string]interface{}{}}
+	fake.seedCompound(1, "Bystander", "must survive the destroy")
+	server := httptest.NewServer(fake.handler())
+	defer server.Close()
+
+	config := fmt.Sprintf(`
+provider "arubasdwan" {
+  orchestrator_url = %q
+  api_key          = "test-key"
+}
+
+resource "arubasdwan_app_compound_classification" "a" {
+  name   = "ManagedA"
+  dst_ip = "192.0.2.0/24"
+}
+
+resource "arubasdwan_app_compound_classification" "b" {
+  name   = "ManagedB"
+  dst_ip = "198.51.100.0/24"
+}
+
+resource "arubasdwan_app_compound_classification" "c" {
+  name   = "ManagedC"
+  dst_ip = "203.0.113.0/24"
+}
+`, server.URL)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: protoFactories(),
+		CheckDestroy: func(s *terraform.State) error {
+			for _, name := range []string{"ManagedA", "ManagedB", "ManagedC"} {
+				if fake.lookupCompound(name) != nil {
+					return fmt.Errorf("%s still exists after destroy — a parallel delete hit a wrong slot", name)
+				}
+			}
+			if fake.lookupCompound("Bystander") == nil {
+				return fmt.Errorf("the destroy removed Bystander, which Terraform does not manage")
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("arubasdwan_app_compound_classification.a", "name", "ManagedA"),
+					resource.TestCheckResourceAttr("arubasdwan_app_compound_classification.b", "name", "ManagedB"),
+					resource.TestCheckResourceAttr("arubasdwan_app_compound_classification.c", "name", "ManagedC"),
+				),
 			},
 		},
 	})

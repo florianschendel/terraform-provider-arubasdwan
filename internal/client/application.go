@@ -865,23 +865,6 @@ func (c *Client) GetCompoundClassifications() ([]CompoundClassification, error) 
 	return defs, nil
 }
 
-// GetCompoundClassification retrieves a single compound classification by its
-// numeric ID. Returns (nil, nil) when the classification does not exist.
-func (c *Client) GetCompoundClassification(id int) (*CompoundClassification, error) {
-	defs, err := c.GetCompoundClassifications()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, d := range defs {
-		if d.ID == id {
-			return &d, nil
-		}
-	}
-
-	return nil, nil
-}
-
 // GetCompoundClassificationByName retrieves a single compound classification
 // by its name, compared case-insensitively as the Orchestrator matches
 // application names. Returns (nil, nil) when no classification carries the
@@ -949,48 +932,97 @@ func (c *Client) CreateCompoundClassification(def *CompoundClassification) error
 	return nil
 }
 
-// UpdateCompoundClassification updates an existing compound classification.
+// resolveCompoundIDLocked returns the current numeric ID of the
+// classification carrying the given name, compared case-insensitively, or -1
+// when no classification carries it. Callers must hold appDefMu: the value is
+// only meaningful for as long as no other write renumbers the list.
+func (c *Client) resolveCompoundIDLocked(name string) (int, error) {
+	defs, err := c.GetCompoundClassifications()
+	if err != nil {
+		return -1, fmt.Errorf("error fetching existing compound classifications: %w", err)
+	}
+	for i := range defs {
+		if strings.EqualFold(defs[i].Name, name) {
+			return defs[i].ID, nil
+		}
+	}
+	return -1, nil
+}
+
+// UpdateCompoundClassificationByName updates the compound classification
+// currently carrying currentName, writing the definition in def. It returns
+// the ID the entry held at write time, or found=false when no classification
+// carries the name.
+//
+// Resolving the ID and writing happen under one lock: deleting a compound
+// classification renumbers the remaining ones, so an ID resolved before a
+// concurrent delete completes can already belong to a different rule by the
+// time the write is sent. Serializing both steps means every write acts on a
+// listing that reflects all previous writes of this process.
 //
 // API endpoint: POST /gms/rest/applicationDefinition/compoundClassification?id=<id>
-func (c *Client) UpdateCompoundClassification(def CompoundClassification) error {
+func (c *Client) UpdateCompoundClassificationByName(currentName string, def CompoundClassification) (int, bool, error) {
 	c.appDefMu.Lock()
 	defer c.appDefMu.Unlock()
 
+	id, err := c.resolveCompoundIDLocked(currentName)
+	if err != nil {
+		return -1, false, err
+	}
+	if id < 0 {
+		return -1, false, nil
+	}
+
+	def.ID = id
 	body := compoundModelToPostBody(def)
 
-	path := fmt.Sprintf("/gms/rest/applicationDefinition/compoundClassification?id=%d", def.ID)
+	path := fmt.Sprintf("/gms/rest/applicationDefinition/compoundClassification?id=%d", id)
 	respBody, statusCode, err := c.doRequest("POST", path, body)
 	if err != nil {
-		return err
+		return -1, false, err
 	}
 
 	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
-		return fmt.Errorf("POST compoundClassification returned status %d: %s",
+		return -1, false, fmt.Errorf("POST compoundClassification returned status %d: %s",
 			statusCode, string(respBody))
 	}
 
-	return nil
+	return id, true, nil
 }
 
-// DeleteCompoundClassification deletes a compound classification by its numeric ID.
+// DeleteCompoundClassificationByName deletes the compound classification
+// currently carrying the given name. It returns found=false when no
+// classification carries the name, which callers treat as already deleted.
+//
+// Resolving the ID and deleting happen under one lock for the same reason as
+// in UpdateCompoundClassificationByName: several deletes in one apply run in
+// parallel, and each delete renumbers the list the next one addresses.
 //
 // API endpoint: DELETE /gms/rest/applicationDefinition/compoundClassification?id=<id>
-func (c *Client) DeleteCompoundClassification(id int) error {
+func (c *Client) DeleteCompoundClassificationByName(name string) (bool, error) {
 	c.appDefMu.Lock()
 	defer c.appDefMu.Unlock()
+
+	id, err := c.resolveCompoundIDLocked(name)
+	if err != nil {
+		return false, err
+	}
+	if id < 0 {
+		return false, nil
+	}
 
 	path := fmt.Sprintf("/gms/rest/applicationDefinition/compoundClassification?id=%d", id)
 	respBody, statusCode, err := c.doRequest("DELETE", path, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if statusCode != http.StatusOK && statusCode != http.StatusNoContent {
-		return fmt.Errorf("DELETE compoundClassification returned status %d: %s",
+		return false, fmt.Errorf("DELETE compoundClassification returned status %d: %s",
 			statusCode, string(respBody))
 	}
 
-	return nil
+	return true, nil
 }
 
 // ===========================================================================

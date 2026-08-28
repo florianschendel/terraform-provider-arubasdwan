@@ -72,7 +72,7 @@ func (d *appCompoundClassificationsDataSource) Schema(_ context.Context, _ datas
 							Description: "The numeric ID the Orchestrator currently assigns (as a string). It doubles " +
 								"as the rule's position in the classification priority order and is reassigned when a " +
 								"compound classification is deleted, so it is not a stable reference — match on name instead.",
-							Computed:    true,
+							Computed: true,
 						},
 						"name": schema.StringAttribute{
 							Description: "The name of the application.",
